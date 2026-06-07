@@ -1,0 +1,7 @@
+image: /home/nu/catkin_ws_ov/maps/house_living.pgm
+resolution: 0.050000
+origin: [-7.621900, -5.158016, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+
