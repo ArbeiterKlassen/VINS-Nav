@@ -1,5 +1,7 @@
 # VINS-Nav: Pseudo-Stereo Visual-Inertial SLAM + Navigation
 
+> [中文](README_CN.md)
+
 Gazebo TurtleBot3 house environment with OpenVINS stereo VIO, RTAB-Map RGBD SLAM,
 and ROS Navigation Stack. The core innovation is a depth-to-stereo warping node that
 enables metric-scale stereo VIO from a single RGB-D camera.
