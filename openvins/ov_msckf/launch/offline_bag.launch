@@ -1,0 +1,64 @@
+<launch>
+  <!-- Offline bag processing: sensor data → pseudo_stereo → OV → RTAB-Map → map -->
+  <arg name="bag" default="/home/nu/house_full.bag"/>
+
+  <!-- Load URDF for robot_state_publisher -->
+  <param name="robot_description"
+         command="$(find xacro)/xacro --inorder $(find ov_msckf)/gazebo_models/urdf/turtlebot3_waffle_openvins.urdf.xacro" />
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+    <param name="publish_frequency" type="double" value="50.0" />
+  </node>
+
+  <!-- Pseudo-Stereo -->
+  <node name="pseudo_stereo" pkg="ov_msckf" type="pseudo_stereo.py" output="screen">
+    <param name="baseline" value="0.08"/>
+  </node>
+
+  <!-- OpenVINS Stereo -->
+  <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf" output="screen" clear_params="true">
+    <param name="verbosity" type="string" value="INFO" />
+    <param name="config_path" type="string"
+           value="$(find ov_msckf)/../config/rgbd_stereo/estimator_config.yaml" />
+    <param name="use_stereo"  type="bool"   value="true" />
+    <param name="max_cameras" type="int"    value="2" />
+    <param name="publish_global_to_imu_tf" type="bool" value="false" />
+  </node>
+
+  <!-- TF bridges for RTAB-Map and nav -->
+  <node name="odom_tf_pub" pkg="ov_msckf" type="odom_tf_pub.py" output="screen" />
+  <node pkg="tf" type="static_transform_publisher" name="imu_base_bridge"
+        args="0 0 -0.078 0 0 0 imu base_footprint 100" />
+  <node pkg="tf" type="static_transform_publisher" name="global_odom_bridge"
+        args="0 0 0 0 0 0 global odom 100" />
+  <node pkg="tf" type="static_transform_publisher" name="odom_base_bridge"
+        args="0 0 -0.078 0 0 0 odom base_footprint 100" />
+
+  <!-- RTAB-Map -->
+  <group ns="rtabmap">
+    <node name="rtabmap" pkg="rtabmap_slam" type="rtabmap" output="screen" args="--delete_db_on_start">
+      <param name="frame_id"             type="string" value="base_footprint"/>
+      <param name="odom_frame_id"        type="string" value="global"/>
+      <param name="subscribe_depth"      type="bool"   value="true"/>
+      <param name="subscribe_scan"       type="bool"   value="false"/>
+      <param name="approx_sync"          type="bool"   value="true"/>
+      <param name="wait_for_transform_duration" type="double" value="0.2"/>
+      <param name="subscribe_odom_info"  type="bool"   value="false"/>
+      <param name="gen_scan"             type="bool"   value="false"/>
+      <param name="gen_depth"            type="bool"   value="false"/>
+      <param name="RGBD/NeighborLinkRefining" type="string" value="true"/>
+      <param name="RGBD/ProximityBySpace"     type="string" value="true"/>
+      <param name="RGBD/AngularUpdate"        type="string" value="0.01"/>
+      <param name="RGBD/LinearUpdate"         type="string" value="0.01"/>
+      <param name="RGBD/OptimizeFromGraphEnd" type="string" value="false"/>
+      <param name="Reg/Strategy"              type="string" value="0"/>
+      <param name="Grid/FromDepth"            type="string" value="true"/>
+      <param name="Grid/RangeMax"             type="string" value="20"/>
+      <param name="Grid/GlobalFullMap"         type="string" value="true"/>
+      <remap from="rgb/image"       to="/camera/rgb/image_raw"/>
+      <remap from="depth/image"     to="/camera/depth/image_raw"/>
+      <remap from="rgb/camera_info" to="/camera/rgb/camera_info"/>
+      <remap from="odom"            to="/ov_msckf/odomimu"/>
+    </node>
+  </group>
+
+</launch>

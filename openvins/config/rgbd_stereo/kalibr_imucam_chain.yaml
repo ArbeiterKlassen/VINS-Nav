@@ -1,0 +1,37 @@
+%YAML:1.0
+
+# =============================================================================
+# Pseudo-Stereo Camera-IMU chain for TurtleBot3 Gazebo
+# cam0: left  (real RGB camera  /camera/rgb/image_raw)
+# cam1: right (virtual from depth /camera/right/image_raw, baseline=0.08m)
+# =============================================================================
+
+cam0:
+  T_cam_imu:
+    - [0.0000000000000000, -1.0000000000000000, 0.0000000000000000, -0.0470000000000000]
+    - [0.0000000000000000, 0.0000000000000000, -1.0000000000000000, 0.0390000000000000]
+    - [1.0000000000000000, 0.0000000000000000, 0.0000000000000000, -0.0690000000000000]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [1]
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [403.0, 403.0, 320.0, 240.0]
+  resolution: [640, 480]
+  rostopic: /camera/rgb/image_raw
+  timeshift_cam_imu: 0.0
+
+cam1:
+  T_cam_imu:
+    - [0.0000000000000000, -1.0000000000000000, 0.0000000000000000, -0.1270000000000000]
+    - [0.0000000000000000, 0.0000000000000000, -1.0000000000000000, 0.0390000000000000]
+    - [1.0000000000000000, 0.0000000000000000, 0.0000000000000000, -0.0690000000000000]
+    - [0.0, 0.0, 0.0, 1.0]
+  cam_overlaps: [0]
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radtan
+  intrinsics: [403.0, 403.0, 320.0, 240.0]
+  resolution: [640, 480]
+  rostopic: /camera/right/image_raw
+  timeshift_cam_imu: 0.0

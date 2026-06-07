@@ -1,0 +1,43 @@
+%YAML:1.0
+
+# =============================================================================
+# TurtleBot3 Waffle Gazebo IMU noise parameters
+# Measured from Allan variance PSD analysis of /tmp/imu_still.bag
+# Accel noise density: 0.00083 m/s^2/sqrt(Hz), random walk: ~0 (sim, no real drift)
+# Gyro  noise density: 0.00083 rad/s/sqrt(Hz), random walk: ~0 (sim, no real drift)
+# =============================================================================
+
+imu0:
+  T_i_b:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  accelerometer_noise_density: 0.00083
+  accelerometer_random_walk: 0.000001
+  gyroscope_noise_density: 0.00083
+  gyroscope_random_walk: 0.0000001
+  rostopic: /imu
+  time_offset: 0.0
+  update_rate: 400
+  model: "kalibr"
+  Tw:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  R_IMUtoGYRO:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  Ta:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  R_IMUtoACC:
+    - [ 1.0, 0.0, 0.0 ]
+    - [ 0.0, 1.0, 0.0 ]
+    - [ 0.0, 0.0, 1.0 ]
+  Tg:
+    - [ 0.0, 0.0, 0.0 ]
+    - [ 0.0, 0.0, 0.0 ]
+    - [ 0.0, 0.0, 0.0 ]

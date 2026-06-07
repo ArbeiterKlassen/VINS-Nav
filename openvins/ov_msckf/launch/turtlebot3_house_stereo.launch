@@ -1,0 +1,95 @@
+<launch>
+  <!-- OpenVINS Pseudo-Stereo + Gazebo + RTAB-Map -->
+  <arg name="model" default="waffle"/>
+  <env name="TURTLEBOT3_MODEL" value="$(arg model)"/>
+  <arg name="x_pos" default="-3.0"/>
+  <arg name="y_pos" default="1.0"/>
+  <arg name="z_pos" default="0.0"/>
+
+  <!-- ================================================================ -->
+  <!-- 1. Gazebo World -->
+  <!-- ================================================================ -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find turtlebot3_gazebo)/worlds/turtlebot3_house.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="true"/>
+    <arg name="headless" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+
+  <!-- ================================================================ -->
+  <!-- 2. Robot Description -->
+  <!-- ================================================================ -->
+  <param name="robot_description"
+         command="$(find xacro)/xacro --inorder $(find ov_msckf)/gazebo_models/urdf/turtlebot3_waffle_openvins.urdf.xacro" />
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+    <param name="publish_frequency" type="double" value="50.0" />
+  </node>
+  <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
+        args="-urdf -model turtlebot3 -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
+
+  <!-- ================================================================ -->
+  <!-- 3. Pseudo-Stereo Node: RGB + Depth → Virtual Right Camera -->
+  <!-- ================================================================ -->
+  <node name="pseudo_stereo" pkg="ov_msckf" type="pseudo_stereo.py" output="screen">
+    <param name="baseline" value="0.08"/>
+  </node>
+
+  <!-- ================================================================ -->
+  <!-- 4. OpenVINS Stereo (max_cameras=2, use_stereo=true) -->
+  <!-- ================================================================ -->
+  <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf"
+        output="screen" clear_params="true" required="false">
+    <param name="verbosity"   type="string" value="DEBUG" />
+    <param name="config_path" type="string"
+           value="$(find ov_msckf)/../config/rgbd_stereo/estimator_config.yaml" />
+    <param name="use_stereo"  type="bool"   value="true" />
+    <param name="max_cameras" type="int"    value="2" />
+    <param name="publish_global_to_imu_tf" type="bool" value="false" />
+  </node>
+
+  <!-- ================================================================ -->
+  <!-- 5. RTAB-Map using OpenVINS odometry -->
+  <!-- ================================================================ -->
+  <group ns="rtabmap">
+    <node name="rtabmap" pkg="rtabmap_slam" type="rtabmap" output="screen" args="--delete_db_on_start">
+      <param name="frame_id"             type="string" value="base_footprint"/>
+      <param name="odom_frame_id"        type="string" value="global"/>
+      <param name="subscribe_depth"      type="bool"   value="true"/>
+      <param name="subscribe_scan"       type="bool"   value="false"/>
+      <param name="approx_sync"          type="bool"   value="true"/>
+      <param name="wait_for_transform_duration" type="double" value="0.2"/>
+      <param name="subscribe_odom_info"  type="bool"   value="false"/>
+      <param name="gen_scan"             type="bool"   value="false"/>
+      <param name="gen_depth"            type="bool"   value="false"/>
+      <param name="RGBD/NeighborLinkRefining" type="string" value="true"/>
+      <param name="RGBD/ProximityBySpace"     type="string" value="true"/>
+      <param name="RGBD/AngularUpdate"        type="string" value="0.01"/>
+      <param name="RGBD/LinearUpdate"         type="string" value="0.01"/>
+      <param name="RGBD/OptimizeFromGraphEnd" type="string" value="false"/>
+      <param name="Reg/Strategy"              type="string" value="0"/>
+      <param name="Grid/FromDepth"            type="string" value="true"/>
+      <param name="Grid/RangeMax"             type="string" value="20"/>
+      <param name="Grid/CellSize"             type="string" value="0.05"/>
+      <param name="Grid/MapFrameProjection"   type="string" value="true"/>
+      <param name="Grid/GlobalFullMap"         type="string" value="true"/>
+      <remap from="rgb/image"       to="/camera/rgb/image_raw"/>
+      <remap from="depth/image"     to="/camera/depth/image_raw"/>
+      <remap from="rgb/camera_info" to="/camera/rgb/camera_info"/>
+      <remap from="odom"            to="/ov_msckf/odomimu"/>
+    </node>
+  </group>
+
+  <!-- Dynamic TF: odomimu (global->imu) -> base_footprint -->
+  <node name="odom_tf_pub" pkg="ov_msckf" type="odom_tf_pub.py" output="screen" />
+  <!-- Static: imu -> base_footprint (fixed offset: imu is 0.078m above base) -->
+  <node pkg="tf" type="static_transform_publisher" name="imu_base_bridge"
+        args="0 0 -0.078 0 0 0 imu base_footprint 100" />
+  <!-- Also: global->odom (identity) and odom->base_footprint for move_base -->
+  <node pkg="tf" type="static_transform_publisher" name="global_odom_bridge"
+        args="0 0 0 0 0 0 global odom 100" />
+  <node pkg="tf" type="static_transform_publisher" name="odom_base_bridge"
+        args="0 0 -0.078 0 0 0 odom base_footprint 100" />
+
+</launch>

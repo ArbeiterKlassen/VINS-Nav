@@ -1,0 +1,9 @@
+free_thresh: 0.196
+image: /home/nu/catkin_ws_ov/maps/house_final.pgm
+negate: 0
+occupied_thresh: 0.65
+origin:
+- -12.785504049308237
+- -7.697479622704835
+- 0.0
+resolution: 0.05

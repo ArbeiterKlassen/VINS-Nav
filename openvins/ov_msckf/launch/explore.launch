@@ -1,0 +1,89 @@
+<launch>
+  <!-- Exploration: RTAB-Map live SLAM + move_base + frontier explorer -->
+  <!-- No AMCL needed — RTAB-Map provides map->global TF via SLAM -->
+  <!-- TF chain: map->global->odom->base_footprint -->
+
+  <!-- Relay RTAB-Map grid_map to /map for move_base -->
+  <node name="map_relay" pkg="topic_tools" type="relay"
+        args="/rtabmap/grid_map /map" />
+
+  <!-- move_base with RTAB-Map live map, NO AMCL -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <param name="base_global_planner"  value="navfn/NavfnROS"/>
+    <param name="base_local_planner"   value="dwa_local_planner/DWAPlannerROS"/>
+    <param name="controller_frequency"   value="10.0"/>
+    <param name="planner_frequency"      value="1.0"/>
+    <param name="clearing_rotation_allowed" value="false"/>
+    <param name="planner_patience"     value="5.0"/>
+    <param name="controller_patience"  value="15.0"/>
+
+    <rosparam>
+      # Global costmap: use live RTAB-Map grid_map
+      global_costmap:
+        global_frame: map
+        robot_base_frame: base_footprint
+        update_frequency: 2.0
+        publish_frequency: 1.0
+        static_map: true
+        rolling_window: false
+        resolution: 0.05
+    </rosparam>
+
+    <rosparam>
+      # Local costmap: use laser scan
+      local_costmap:
+        global_frame: odom
+        robot_base_frame: base_footprint
+        update_frequency: 5.0
+        publish_frequency: 2.0
+        static_map: false
+        rolling_window: true
+        width: 4.0
+        height: 4.0
+        resolution: 0.05
+    </rosparam>
+
+    <rosparam>
+      # Common
+      obstacle_range: 3.0
+      raytrace_range: 3.5
+      footprint: [[-0.15,-0.15],[-0.15,0.15],[0.15,0.15],[0.15,-0.15]]
+      inflation_radius: 0.3
+      transform_tolerance: 2.0
+      observation_sources: scan
+      scan: {data_type: LaserScan, topic: /scan, marking: true, clearing: true, inf_is_valid: true}
+    </rosparam>
+
+    <rosparam>
+      NavfnROS: {allow_unknown: true, default_tolerance: 0.1}
+    </rosparam>
+
+    <rosparam>
+      DWAPlannerROS:
+        max_vel_x: 0.22
+        min_vel_x: -0.05
+        max_vel_y: 0.0
+        min_vel_y: 0.0
+        max_vel_theta: 0.8
+        min_vel_theta: 0.2
+        min_in_place_vel_theta: 0.3
+        acc_lim_x: 0.5
+        acc_lim_theta: 1.0
+        xy_goal_tolerance: 0.15
+        yaw_goal_tolerance: 0.15
+        sim_time: 1.5
+        vx_samples: 6
+        vtheta_samples: 20
+        path_distance_bias: 32.0
+        goal_distance_bias: 24.0
+        occdist_scale: 0.01
+    </rosparam>
+
+    <remap from="scan" to="/scan"/>
+  </node>
+
+  <!-- Frontier Explorer -->
+  <node name="frontier_explore" pkg="ov_msckf" type="frontier_explore.py" output="screen">
+    <param name="max_goals" value="50"/>
+  </node>
+</launch>

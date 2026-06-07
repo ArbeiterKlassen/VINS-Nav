@@ -1,0 +1,13 @@
+# Common costmap parameters for TurtleBot3
+obstacle_range: 3.0
+raytrace_range: 3.5
+footprint: [[-0.15, -0.15], [-0.15, 0.15], [0.15, 0.15], [0.15, -0.15]]
+inflation_radius: 0.3
+transform_tolerance: 0.5
+observation_sources: scan
+scan:
+  data_type: LaserScan
+  topic: /scan
+  marking: true
+  clearing: true
+  inf_is_valid: true
