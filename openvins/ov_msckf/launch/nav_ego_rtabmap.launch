@@ -116,7 +116,23 @@
       <param name="RGBD/OptimizeFromGraphEnd"  type="string" value="false"/>
       <param name="Reg/Strategy"               type="string" value="0"/>
       <param name="Grid/FromDepth"             type="string" value="true"/>
-      <param name="Grid/RangeMax"              type="string" value="20"/>
+      <!-- The stock install links OctoMap, so Grid/3D defaults to true: the 2D
+           grid is then projected from an octree and 2D ray tracing is NOT applied.
+           With RayTracing off the grid only counts hits, so a single bad depth
+           point stays occupied forever. That is exactly what produces the radial
+           streaks. 2D + ray tracing carves free space and erases them. -->
+      <param name="Grid/3D"                    type="string" value="false"/>
+      <param name="Grid/RayTracing"            type="string" value="true"/>
+      <!-- Real sensor clip is ~4.5 m (measured in the bag); 20 invited far outliers. -->
+      <param name="Grid/RangeMax"              type="string" value="4.5"/>
+      <param name="Grid/RangeMin"              type="string" value="0.2"/>
+      <!-- Rows 355-479 of every depth frame are 100% invalid (bottom 26%):
+           crop them instead of letting them project garbage. -->
+      <param name="Grid/DepthRoiRatios"        type="string" value="0.0 0.0 0.0 0.26"/>
+      <param name="Grid/NoiseFilteringRadius"  type="string" value="0.1"/>
+      <param name="Grid/NoiseFilteringMinNeighbors" type="string" value="5"/>
+      <param name="Grid/DepthDecimation"       type="string" value="4"/>
+      <param name="Grid/MaxGroundHeight"       type="string" value="0.20"/>
       <param name="Grid/CellSize"              type="string" value="0.05"/>
       <param name="Grid/MapFrameProjection"    type="string" value="true"/>
       <param name="Grid/GlobalFullMap"         type="string" value="true"/>

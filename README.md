@@ -739,6 +739,42 @@ empty world.
 
 The 0.08m baseline between cam0 and cam1 is encoded in the translation difference: -0.047 - (-0.127) = 0.08.
 
+### RTAB-Map grid parameters
+
+The stock Noetic install links OctoMap, so `Grid/3D` defaults to **true** — the 2D grid
+is then projected from an octree and **2D ray tracing is not applied**. With ray tracing
+off the grid only counts hits: one bad depth point stays occupied forever, which is the
+mechanism behind the radial streak artefacts.
+
+| Parameter | Stock | Here | Why |
+|-----------|-------|------|-----|
+| `Grid/3D` | true | **false** | take the 2D path so ray tracing applies; also cheaper |
+| `Grid/RayTracing` | false | **true** | carves free space, erases transient false points |
+| `Grid/RangeMax` | 5.0 | **4.5** | measured sensor clip in the bag; 20 invited far outliers |
+| `Grid/RangeMin` | 0 | **0.2** | drop near flying pixels |
+| `Grid/DepthRoiRatios` | 0 0 0 0 | **0 0 0 0.26** | rows 355–479 of every depth frame are 100% invalid |
+| `Grid/NoiseFilteringRadius` | 0.0 | **0.1** | outlier removal (was disabled) |
+| `Grid/NoiseFilteringMinNeighbors` | 5 | 5 | keep |
+| `Grid/MaxGroundHeight` | 0.0 | **0.20** | robot-height ground segmentation |
+
+**Measured facts about the depth stream** (worth knowing before tuning):
+the valid fraction is a constant **62.5% = exactly 300/480 rows** — the bottom 26% of
+every frame is 100% invalid, and max range is clipped at 4.49 m. That is structural,
+not sensor noise, and no morphological close can fill it.
+
+**A/B on a 400 s replay of `house_full.bag`** (identical input, only the grid params
+differ):
+
+| | map size | occupied | free |
+|---|---|---|---|
+| stock params | 264×227 | 15,035 | 6,318 |
+| params above | 236×215 | 4,577 | 22,855 |
+
+The stock map is dense with radial streaks and speckle; the new one has clean walls and
+properly carved free space. The circular boundary is simply the 4.5 m ray range. The
+trade-off to watch: aggressive ray tracing can erase thin/low obstacles — raise
+`Grid/RangeMax` or lower `Grid/RayTracing`'s reach if furniture starts disappearing.
+
 ### Gazebo Model Parameters
 
 | Parameter | Value | Rationale |
