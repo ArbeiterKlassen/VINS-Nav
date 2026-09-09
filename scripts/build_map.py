@@ -4,6 +4,51 @@ import rosbag, rospy, sys, os, cv2
 import numpy as np
 from sensor_msgs.msg import CameraInfo
 
+# Set BUILD_MAP_NO_JUMP_FIX=1 to disable automatic pose-jump correction
+# (useful for reproducing the old behaviour, which needed manual corr_dx/corr_dy).
+NO_JUMP_FIX = os.environ.get('BUILD_MAP_NO_JUMP_FIX', '') not in ('', '0')
+
+def correct_pose_jumps(times, poses, v_max=1.0, verbose=True):
+    """Remove single-sample discontinuities from a VIO trajectory.
+
+    The recorded VIO poses contain occasional one-sample jumps (observed: 0.4 m
+    in 33 ms = 12 m/s, while a TurtleBot3 tops out at 0.26 m/s). They cluster in
+    bursts and are what splits the occupancy grid into disconnected pieces --
+    previously patched by hand with corr_dx/corr_dy.
+
+    Whenever |dp|/dt exceeds v_max the trajectory is treated as discontinuous:
+    the offset is accumulated and applied to every later pose, so the trajectory
+    stays continuous. Returns (corrected_poses, n_jumps).
+    """
+    out = []
+    n_jumps = 0
+    off_x = off_y = 0.0
+    prev_raw = poses[0]
+    out.append(list(poses[0]))
+    for i in range(1, len(times)):
+        dt = times[i] - times[i - 1]
+        raw = poses[i]
+        # Compare raw-vs-raw: comparing against the already-corrected previous
+        # pose would re-detect the same offset on every following sample.
+        dx = raw[0] - prev_raw[0]
+        dy = raw[1] - prev_raw[1]
+        if dt > 0:
+            speed = (dx * dx + dy * dy) ** 0.5 / dt
+            if speed > v_max:
+                off_x += dx
+                off_y += dy
+                n_jumps += 1
+                if verbose:
+                    print("    jump at t=%.1f: %.3f m in %.0f ms (%.1f m/s) -> offset (%.3f, %.3f)"
+                          % (times[i], (dx * dx + dy * dy) ** 0.5, dt * 1000, speed, off_x, off_y))
+        p = list(raw)
+        p[0] -= off_x
+        p[1] -= off_y
+        out.append(p)
+        prev_raw = raw
+    return out, n_jumps
+
+
 def build_map(bag_path, output, stride=5):
     bag = rosbag.Bag(bag_path)
 
@@ -19,6 +64,16 @@ def build_map(bag_path, output, stride=5):
                 )
     odom_times = np.array(sorted(odom_poses.keys()))
     print(f"  {len(odom_times)} poses")
+
+    # Remove VIO pose discontinuities before anything consumes the trajectory.
+    if not NO_JUMP_FIX:
+        raw = [odom_poses[t] for t in odom_times]
+        fixed, n_jumps = correct_pose_jumps(odom_times, raw)
+        if n_jumps:
+            print(f"  corrected {n_jumps} pose jumps (see above)")
+            odom_poses = {t: tuple(p) for t, p in zip(odom_times, fixed)}
+        else:
+            print("  no pose jumps detected")
 
     # Pass 2: get camera intrinsics
     print("Pass 2: camera intrinsics...")

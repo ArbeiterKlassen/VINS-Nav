@@ -608,6 +608,20 @@ Processes a ROS bag directly to build a 2D occupancy grid, completely bypassing 
 **Arguments:** `build_map.py <bag_path> [output_prefix] [max_time] [min_time] [corr_dx] [corr_dy]`
 **Example:** `build_map.py house.bak map -1 -1 -3.2 -1.25` (full bag, drift correction)
 
+**Automatic pose-jump correction (new):** the recorded VIO trajectory contains
+single-sample discontinuities — measured on `house_full.bag`: 0.4 m in one 33 ms
+sample (12 m/s, versus a 0.26 m/s physical maximum), clustered in a burst and all in
+the `x > 1.5` region that the manual `corr_dx`/`corr_dy` patch was aimed at.
+`build_map.py` now detects any `|dp|/dt` above `v_max` (default 1.0 m/s), accumulates
+the offset, and applies it to all later poses, so the trajectory stays continuous.
+Disable with `BUILD_MAP_NO_JUMP_FIX=1` to reproduce the old behaviour.
+
+> **Honest status:** the correction is implemented and unit-tested, but on
+> `house_full.bag` it did **not** visibly change the resulting map (485×292 vs
+> 462×292, 16,671 vs 16,758 occupied cells). The dominant map error lies elsewhere —
+> most likely **scale inflation**: the same trajectory implies 0.5–0.7 m/s during
+> normal motion, 2–3× the robot's physical limit.
+
 ### `postprocess_v5.py` — Map Post-Processor
 
 Cleans and completes the occupancy grid.
