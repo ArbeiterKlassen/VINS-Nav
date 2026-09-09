@@ -7,6 +7,11 @@ The core innovation is **pseudo-stereo**: a depth-to-disparity warping node that
 a virtual right camera from a single RGB-D sensor, enabling OpenVINS to operate in
 metric-scale stereo mode.
 
+Navigation is handled by **EGO-Planner** (ZJU FAST Lab), integrated without modifying
+either codebase — a bridge node translates OpenVINS odometry into the frame convention
+EGO-Planner expects. The full loop is: drive to map → click a goal in RViz → autonomous
+B-spline trajectory → `/cmd_vel`.
+
 **Scale accuracy: 0.991x** (vs. 200× divergence in monocular mode).  
 **3.1m trajectory drift: 2.8cm (0.9%).**  
 **Orientation error: 0.0°.**
@@ -20,11 +25,12 @@ metric-scale stereo mode.
 3. [TF Tree](#tf-tree)
 4. [Requirements & Installation](#requirements--installation)
 5. [Step-by-Step Reproduction](#step-by-step-reproduction)
-6. [Script Reference](#script-reference)
-7. [Configuration Reference](#configuration-reference)
-8. [File Inventory](#file-inventory)
-9. [Performance](#performance)
-10. [Troubleshooting](#troubleshooting)
+6. [EGO-Planner Integration](#ego-planner-integration)
+7. [Script Reference](#script-reference)
+8. [Configuration Reference](#configuration-reference)
+9. [File Inventory](#file-inventory)
+10. [Performance](#performance)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -62,6 +68,36 @@ metric-scale stereo mode.
                           │  AMCL          │
                           │  move_base     │
                           └────────────────┘
+
+Optional autonomous navigation (EGO-Planner), see §EGO-Planner Integration:
+                          ┌────────────────┐
+                          │   RTAB-Map     │
+                          └───────┬────────┘
+                                  │ /rtabmap/grid_map
+                                  ▼
+                          ┌────────────────┐   ┌────────────────┐
+                          │ rtabmap_map_   │   │ vio_odom_      │
+                          │ relay → /map   │   │ bridge         │
+                          └───────┬────────┘   └───────┬────────┘
+                                  │ /static_map        │ /odom_world
+                                  ▼                    │
+                          ┌────────────────┐           │
+                          │  map_to_pc2    │           │
+                          │  2D→3D cloud   │           │
+                          └───────┬────────┘           │
+                                  │ global_cloud       │
+                                  ▼                    ▼
+                          ┌────────────────────────────────────┐
+                          │  ego_planner_node (A* + B-spline)  │
+                          └───────────────┬────────────────────┘
+                                          │ /planning/bspline
+                                          ▼
+                                  ┌────────────────┐
+                                  │  traj_server   │
+                                  └───────┬────────┘
+                                          │ /cmd_vel
+                                          ▼
+                                     robot chassis
 ```
 
 ### Data Flow
@@ -94,10 +130,35 @@ Processing Layer:
     OUT: /rtabmap/grid_map, /rtabmap/cloud_map, /rtabmap/info,
          /rtabmap/mapData, /rtabmap/mapGraph
 
-Navigation Layer:
+Navigation Layer (AMCL + move_base, alternative):
   map_server:  IN: (file)  OUT: /map (static, latched)
   AMCL:        IN: /map, /scan  OUT: /amcl_pose, /tf (map→odom)
   move_base:   IN: /map, /scan, /tf  OUT: /cmd_vel
+
+EGO-Planner Layer (optional, see §EGO-Planner Integration):
+  vio_odom_bridge.py:
+    IN:  /ov_msckf/odomimu
+    OUT: /odom_world, TF odom→base_footprint
+
+  rtabmap_map_relay.py:
+    IN:  /rtabmap/grid_map
+    OUT: /map, service /static_map
+
+  map_to_pc2 (from ego-planner):
+    IN:  service /static_map
+    OUT: /map_generator/global_cloud
+
+  waypoint_generator:
+    IN:  /move_base_simple/goal (RViz "2D Nav Goal"), /odom_world
+    OUT: /waypoint_generator/waypoints
+
+  ego_planner_node:
+    IN:  /odom_world, /map_generator/global_cloud, /waypoint_generator/waypoints
+    OUT: /planning/bspline
+
+  traj_server:
+    IN:  /planning/bspline, /odom_world
+    OUT: /cmd_vel
 ```
 
 ---
@@ -119,6 +180,12 @@ Navigation Layer:
 | `/rtabmap/mapData` | rtabmap_msgs/MapData | on change | Full map graph with mapToOdom |
 | `/rtabmap/mapGraph` | rtabmap_msgs/MapGraph | on change | Pose graph visualization |
 | `/tf` (global→odom) | tf2_msgs/TFMessage | 30Hz | Dynamic VIO pose from dyn_odom_tf.py |
+| `/odom_world` | nav_msgs/Odometry | 50Hz | EGO-Planner odometry bridge (odom→base_footprint) |
+| `/map` | nav_msgs/OccupancyGrid | on change | Live map relayed from `/rtabmap/grid_map` (latched) |
+| `/map_generator/global_cloud` | sensor_msgs/PointCloud2 | 10Hz | 2D grid extruded to 3D cloud for EGO-Planner's ESDF |
+| `/waypoint_generator/waypoints` | nav_msgs/Path | on goal | Navigation goal from RViz "2D Nav Goal" |
+| `/planning/bspline` | ego_planner/Bspline | on replan | Optimized B-spline trajectory |
+| `/cmd_vel` (EGO mode) | geometry_msgs/Twist | 20Hz | Pure-pursuit velocity command from traj_server |
 
 ### Subscribed Topics (from Gazebo)
 
@@ -182,6 +249,27 @@ Navigation Layer:
 - `base_footprint` must have ONLY ONE parent. Never publish both `imu→base_footprint` and `odom→base_footprint` simultaneously.
 - OpenVINS's internal TF publisher (`publish_global_to_imu_tf`) is disabled to avoid 333Hz TF buffer flooding.
 
+### TF Tree in EGO-Planner Mode
+
+EGO-Planner expects `odom` to be a **fixed world frame** with the robot moving inside it
+(same semantic as the original `fake_odom`). The chain becomes:
+
+```
+map ──(RTAB-Map mapData, dynamic)──► odom ──(VIO bridge, dynamic)──► base_footprint ──(URDF)──► base_link
+```
+
+| Transform | Publisher | Type | Notes |
+|-----------|-----------|------|-------|
+| `map → odom` | `map_tf_broadcaster.py` | dynamic, 10Hz | RTAB-Map localization correction from `/rtabmap/mapData` |
+| `odom → base_footprint` | `vio_odom_bridge.py` | dynamic, 50Hz | VIO pose with imu→base Z offset applied |
+| `global → odom` | static publisher | static identity | required because RTAB-Map's `odom_frame_id=global` |
+| `imu → base_footprint` | static publisher | static | fallback, Z = −0.078 m |
+
+**Why a static `odom → base_footprint` fallback is also present:** before VIO initializes
+there is no dynamic transform, and TF2 reports *"Could not find a connection between
+'global' and 'base_footprint'"*. A static fallback keeps the tree connected; the dynamic
+bridge takes over as soon as odometry arrives.
+
 ---
 
 ## Requirements & Installation
@@ -227,6 +315,26 @@ The standalone scripts in `scripts/` can run anywhere.
 cd ~/catkin_ws_ov
 catkin_make  # recompile if launch files are new
 ```
+
+### EGO-Planner Workspace (only for §EGO-Planner Integration)
+
+EGO-Planner lives in a **second** catkin workspace, checked out as a git submodule:
+
+```bash
+git submodule update --init --recursive      # from the repo root
+cd ego-planner/planner
+catkin_make                                  # or use the prebuilt devel/ if present
+```
+
+Two workspaces must be overlaid, and the second one must be sourced in *extend* mode
+or it will roll back the first one's environment:
+
+```bash
+source /home/nu/VINS-Nav/setup_ego_vio.sh    # handles both + the --extend flag
+```
+
+`setup_ego_vio.sh` also strips newlines that the EGO-Planner workspace injects into
+`ROS_PACKAGE_PATH`, which otherwise makes `rospack` fail to find every package.
 
 ---
 
@@ -280,7 +388,7 @@ python3 scripts/build_map.py house.bak output_map
 python3 scripts/postprocess_v5.py output_map.yaml output_map_final.pgm
 ```
 
-### 3. Navigation
+### 3. Navigation (AMCL + move_base)
 
 ```bash
 # Launch navigation stack with a pre-built map
@@ -291,6 +399,118 @@ rostopic pub /move_base_simple/goal geometry_msgs/PoseStamped \
   "header: {frame_id: 'map'}" \
   "pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}"
 ```
+
+### 4. Drive → Map → Navigate (EGO-Planner, one session)
+
+```bash
+# Terminal 1: everything — Gazebo, VIO, RTAB-Map, EGO-Planner
+source ~/VINS-Nav/setup_ego_vio.sh
+roslaunch ov_msckf nav_ego_rtabmap.launch
+
+# Terminal 2: drive the robot around to build the map
+roslaunch turtlebot3_teleop turtlebot3_teleop_key.launch
+
+# Terminal 3 (optional): watch the map grow
+rostopic hz /map
+
+# When the map looks good: stop driving.
+# In RViz press G, click a destination → EGO-Planner plans and drives there.
+```
+
+The map is live: RTAB-Map's grid is relayed to `/map` and `/static_map`, and
+`map_to_pc2` re-reads it every 2 s so the planner's ESDF stays current.
+
+For a **pre-built map** instead (no RTAB-Map, no online localization):
+
+```bash
+source ~/VINS-Nav/setup_ego_vio.sh
+roslaunch ov_msckf nav_ego_vio.launch gazebo:=true map_file:=/path/to/map.yaml
+```
+
+---
+
+## EGO-Planner Integration
+
+[EGO-Planner](https://github.com/ZJU-FAST-Lab/ego-planner) (ZJU FAST Lab) is a
+gradient-based local planner: A* search over a Euclidean Signed Distance Field (ESDF)
+produces a coarse path, which is then refined into a smooth, collision-free **B-spline**
+trajectory by optimizing its control points against smoothness and collision costs.
+`traj_server` converts the B-spline into `/cmd_vel` via pure-pursuit control.
+
+### Design constraint: neither side was modified
+
+The integration adds a bridge layer only. OpenVINS config, `pseudo_stereo.py`, the
+EGO-Planner binaries, `map_to_pc2.py` and `fake_odom.py` are untouched. The one
+exception is a **6-line backward-compatible addition** to `map_to_pc2.py` (a
+`refresh_interval` parameter, default `0` = original behavior) so it can re-read a
+live-updating map.
+
+### The mismatch being bridged
+
+| | OpenVINS | EGO-Planner |
+|---|----------|-------------|
+| Odometry topic | `/ov_msckf/odomimu` | `/odom_world` |
+| `frame_id` | `global` | `odom` |
+| `child_frame_id` | `imu` | `base_footprint` |
+| Map source | RTAB-Map `/rtabmap/grid_map` | `/map` + `/static_map` service |
+
+`vio_odom_bridge.py` subscribes to `/ov_msckf/odomimu`, applies the fixed
+IMU→base_footprint offset (0.078 m down, rotated by the current IMU orientation),
+and republishes as `/odom_world` **plus** a dynamic `odom → base_footprint` TF at 50 Hz.
+
+`rtabmap_map_relay.py` republishes RTAB-Map's `/rtabmap/grid_map` to `/map` and
+advertises a `/static_map` service, because RTAB-Map does not provide one and
+`map_to_pc2` depends on it.
+
+### Launch files
+
+| Launch file | Map source | RTAB-Map | Use case |
+|-------------|-----------|----------|----------|
+| `turtlebot3_house_stereo.launch` | RTAB-Map | ✔ | Mapping only (original) |
+| `nav_ego_rtabmap.launch` | RTAB-Map, live | ✔ | **Drive → map → navigate, one session** |
+| `nav_ego_vio.launch` | `map_server` (file) | ✘ | Pre-built map navigation |
+
+### Verified topic contract
+
+Every topic connection below was confirmed against the compiled EGO-Planner binary
+symbol tables (there is no source in the distributed build) and by launch testing:
+
+```
+waypoint_generator  sub: /move_base_simple/goal, /odom_world   pub: /waypoint_generator/waypoints
+ego_planner_node    sub: /odom_world, /map_generator/global_cloud, /waypoint_generator/waypoints
+                    pub: /planning/bspline  (ego_planner/Bspline)
+traj_server         sub: /planning/bspline, /odom_world         pub: /cmd_vel
+map_to_pc2          sub: service /static_map                    pub: /map_generator/global_cloud
+```
+
+### Workspace restoration notes
+
+The EGO-Planner workspace is distributed **pre-built**, without source. On a fresh
+clone, run the restoration script once:
+
+```bash
+./scripts/setup_ego_workspace.sh        # idempotent, safe to re-run
+```
+
+It regenerates everything from artifacts that *are* present (compiled C++ headers and
+shared libraries):
+
+1. `devel/.catkin` repointed to the local source dir.
+2. `package.xml` written for all 19 packages in `devel/share/` (and `src/`, without
+   clobbering the real `map_tools/package.xml`) — otherwise `rospack` finds nothing.
+3. `*.msg` definitions reconstructed from the C++ `Definition` structs, so `rosmsg
+   show` and any rebuild work. (The distributed build ships only compiled headers.)
+4. catkin wrapper scripts under `devel/lib/*/` repointed from the original build
+   machine's path (`/home/bingoling/Desktop/planner/...`) to the local source.
+
+The full debugging history is in `docs/openvins_egoplanner.md`.
+
+### Known limitation
+
+The `ego_planner_node` FSM stays in `INIT` until odometry arrives on `/odom_world`.
+Without a running VIO (or a bag replay) it will simply idle — that is expected, not a
+failure. VIO also needs a few stationary seconds for ZUPT initialization before it
+publishes anything.
 
 ---
 
@@ -377,6 +597,32 @@ No map or planning required.
 Right-side wall-following behavior using laser scan. Maintains ~0.6m distance from
 the right wall. Useful for systematic coverage of rooms.
 
+### `vio_odom_bridge.py` — VIO → EGO-Planner Odometry Bridge
+
+Translates OpenVINS odometry into the frame convention EGO-Planner expects.
+
+**Input:** `/ov_msckf/odomimu` (`global → imu`)
+**Output:** `/odom_world` (`odom → base_footprint`) at 50 Hz, plus dynamic TF `odom → base_footprint`
+
+**Transform:** `p_base = p_imu + R(imu) · (0, 0, −0.078)` — the fixed offset from the
+IMU (0.078 m above `base_footprint`) rotated into the world frame. Orientation is
+passed through unchanged (IMU and base_footprint share it). Pose/twist covariances
+are forwarded so downstream nodes can gauge localization quality.
+
+Uses `tf2_ros.TransformBroadcaster` — publishing a bare `TransformStamped` to `/tf`
+does **not** produce a valid `tf2_msgs/TFMessage` and TF2 silently ignores it.
+
+### `rtabmap_map_relay.py` — Live Map Relay
+
+Bridges RTAB-Map's live occupancy grid to the interfaces EGO-Planner needs.
+
+**Input:** `/rtabmap/grid_map`
+**Output:** `/map` (latched) + service `/static_map`
+
+RTAB-Map publishes `grid_map` but neither `/map` nor a `/static_map` service, and
+`map_to_pc2` calls `/static_map` on startup. Without this relay the planner gets an
+empty world.
+
 ---
 
 ## Configuration Reference
@@ -451,6 +697,9 @@ openvins/
     │   ├── rtabmap_db.launch                 # RTAB-Map solo with odom remap
     │   ├── offline_bag.launch                # Offline processing pipeline
     │   ├── nav_clean.launch                  # AMCL + move_base
+    │   ├── nav_ego_rtabmap.launch            # EGO-Planner + live RTAB-Map map
+    │   ├── nav_ego_vio.launch                # EGO-Planner + pre-built map
+    │   ├── nav_ego.rviz                      # RViz config (Fixed Frame: map)
     │   └── explore.launch                    # Frontier exploration
     └── scripts/                      # New scripts
         ├── pseudo_stereo.py          # Depth→right camera warping
@@ -458,7 +707,9 @@ openvins/
         ├── odom_tf_pub.py            # Odom→TF bridge
         ├── frontier_explore.py       # cv2 frontier detection
         ├── amcl_tf_pub.py            # AMCL→TF bridge
-        └── map_tf_broadcaster.py     # RTAB-Map→TF bridge
+        ├── map_tf_broadcaster.py     # RTAB-Map→TF bridge
+        ├── vio_odom_bridge.py        # VIO→EGO-Planner odometry bridge
+        └── rtabmap_map_relay.py      # RTAB-Map grid→/map + /static_map
 ```
 
 ### Standalone Tools
@@ -472,7 +723,13 @@ scripts/
 ├── offline_final.sh      # One-shot offline processing script
 ├── bounce_explore.py     # Reactive laser-based exploration
 ├── laser_circle.py       # Wall-following exploration
+├── vio_odom_bridge.py    # VIO→EGO-Planner odometry + TF bridge
+├── rtabmap_map_relay.py  # RTAB-Map grid→/map + /static_map
 └── tf_debug.py           # TF2 buffer diagnostic tool
+
+setup_ego_vio.sh          # Combined catkin_ws_ov + ego-planner environment
+ego-planner/              # git submodule (ZJU-FAST-Lab EGO-Planner)
+docs/openvins_egoplanner.md  # Full integration report (architecture + debugging log)
 ```
 
 ---
@@ -491,6 +748,18 @@ scripts/
 | Pseudo-stereo latency | <10ms | Per 640×480 frame |
 | OV tracking rate | 100–300Hz | Varies with camera/IMU ratio |
 | Bag→map processing | ~5 min | 35GB bag, 27M point cloud |
+
+EGO-Planner stack (launch-tested; full closed-loop navigation depends on VIO quality):
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Nodes started | 19/19 | Gazebo + VIO + RTAB-Map + planner |
+| Odometry bridge rate | 50 Hz | `/odom_world` |
+| Map refresh period | 2 s | `map_to_pc2` re-reads live RTAB-Map grid |
+| TF errors after fallback | 0 | was 100+ before the static `odom→base_footprint` fallback |
+| Planning horizon | 5.0 m / 5.0 s | EGO-Planner FSM |
+| Max linear / angular | 0.5 m/s / 1.0 rad/s | `traj_server` limits |
+| Goal tolerance | 0.25 m | pure-pursuit stop radius |
 
 ---
 
@@ -526,9 +795,45 @@ scripts/
   `python3 build_map.py house.bak output -1 -1 -3.2 -1.25`
   Adjust corr_dx/corr_dy as needed based on visual inspection.
 
+### `rospack` cannot find any EGO-Planner package
+- Cause: the pre-built workspace ships without `package.xml` in `devel/share/*/`.
+- Fix: see §EGO-Planner Integration → *Workspace restoration notes*, and use
+  `setup_ego_vio.sh` rather than sourcing the workspaces by hand.
+
+### `ROS_PACKAGE_PATH` looks correct but `rospack` still fails
+- Cause: the EGO-Planner workspace injects embedded newline characters into
+  `ROS_PACKAGE_PATH`, which corrupts path parsing.
+- Fix: `export ROS_PACKAGE_PATH=$(echo "$ROS_PACKAGE_PATH" | tr -d '\n\r')`
+  (already handled inside `setup_ego_vio.sh`).
+
+### Sourcing the second workspace wipes the first one's environment
+- Cause: catkin's `setup.bash` rolls back previously sourced workspaces unless told
+  to extend.
+- Fix: `CATKIN_SETUP_UTIL_ARGS="--extend" source <second-ws>/devel/setup.bash`.
+
+### TF error: *"Could not find a connection between 'global' and 'base_footprint'"*
+- Cause: before VIO initializes, the dynamic `odom → base_footprint` transform does not
+  exist yet, so the tree is split in two.
+- Fix: keep a static `odom → base_footprint` fallback in the launch file; the dynamic
+  bridge overrides it once odometry arrives.
+
+### Bridge publishes TF but TF2 never sees it
+- Cause: publishing a raw `geometry_msgs/TransformStamped` to `/tf` — the topic carries
+  `tf2_msgs/TFMessage`, so the message is dropped.
+- Fix: use `tf2_ros.TransformBroadcaster().sendTransform()`.
+
+### `ego_planner_node` stays in `INIT` forever
+- Cause: it waits for odometry on `/odom_world`; with no VIO running there is none.
+  Also expected in a dry-run test.
+- Fix: start the VIO (or replay a bag) and confirm `rostopic hz /odom_world` is non-zero.
+  VIO needs a few stationary seconds for ZUPT initialization first.
+
 ## Blog
 
-Technical deep-dive (Chinese): [Pseudo-Stereo VIO + RTAB-Map 全链路 SLAM 系统搭建](https://soyorin.work/articles/000031.html)
+Technical deep-dive (Chinese):
+
+1. [Pseudo-Stereo VIO + RTAB-Map 全链路 SLAM 系统搭建](https://soyorin.work/articles/000031.html)
+2. [EGO-Planner 集成：VIO + 建图 + 规划全栈融合](https://soyorin.work/articles/000033.html)
 
 ## License
 

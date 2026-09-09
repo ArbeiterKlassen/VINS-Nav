@@ -1,0 +1,239 @@
+<launch>
+  <!-- ============================================================================
+       nav_ego_vio.launch — Integrated EGO-Planner + OpenVINS VIO Navigation
+
+       Pipeline:
+         VIO (OpenVINS)  ──→ /ov_msckf/odomimu ──→ vio_odom_bridge ──→ /odom_world
+         Offline Map      ──→ map_server ──→ map_to_pc2 ──→ /map_generator/global_cloud
+         Waypoints (RViz) ──→ waypoint_generator ──→ /waypoint_generator/waypoints
+                                                            │
+                 /odom_world + global_cloud + waypoints ──→ ego_planner_node
+                                                            │
+                                               /planning/bspline ──→ traj_server
+                                                            │
+                                                     /cmd_vel ──→ robot chassis
+
+       TF tree:
+         map ──→ global ──→ odom ──→ base_footprint ──→ base_link ──→ ...
+            (static     (static    (DYNAMIC            (URDF,
+             identity)   identity)  from VIO,          robot_state_
+                                    vio_odom_bridge)   publisher)
+
+       ================================================================
+       NO MODIFICATIONS TO EXISTING CODE:
+       - ego-planner map_tools (fake_odom.py, map_to_pc2.py) are UNCHANGED
+       - OpenVINS config (estimator_config.yaml, etc.) are UNCHANGED
+       - pseudo_stereo.py is UNCHANGED
+       - All bridging is done in NEW files: vio_odom_bridge.py + this launch
+       ================================================================
+
+       Usage:
+         # Gazebo online (VIO live, ego-planner drives the robot)
+         roslaunch ov_msckf nav_ego_vio.launch gazebo:=true
+
+         # Offline bag replay (map only, no Gazebo)
+         roslaunch ov_msckf nav_ego_vio.launch sim_time:=true
+         rosbag play with clock flag house.bag
+
+         # With custom offline map
+         roslaunch ov_msckf nav_ego_vio.launch map_file:=/path/to/map.yaml
+       ============================================================================ -->
+
+  <!-- ====== Arguments ====== -->
+  <!-- Default map path is relative to the catkin workspace root
+       (ov_msckf lives at <ws>/src/open_vins/ov_msckf, so 3 levels up is <ws>).
+       Override with map_file:=/path/to/your_map.yaml -->
+  <arg name="map_file"    default="$(find ov_msckf)/../../../maps/house_final.yaml"/>
+  <arg name="rviz_config" default="$(find ov_msckf)/launch/nav_ego.rviz"/>
+  <arg name="sim_time"    default="true"/>
+  <arg name="gazebo"      default="false"/>
+  <arg name="x_pos"       default="-3.0"/>
+  <arg name="y_pos"       default="1.0"/>
+  <arg name="z_pos"       default="0.0"/>
+
+  <param name="/use_sim_time" value="$(arg sim_time)"/>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 1: Gazebo World + VIO (optional)                                 -->
+  <!-- ======================================================================== -->
+  <group if="$(arg gazebo)">
+    <!-- 1a. Gazebo empty world with TurtleBot3 house -->
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
+      <arg name="world_name"  value="$(find turtlebot3_gazebo)/worlds/turtlebot3_house.world"/>
+      <arg name="paused"      value="false"/>
+      <arg name="use_sim_time" value="$(arg sim_time)"/>
+      <arg name="gui"         value="true"/>
+      <arg name="headless"    value="false"/>
+      <arg name="debug"       value="false"/>
+    </include>
+
+    <!-- 1b. Robot Description + State Publisher -->
+    <param name="robot_description"
+           command="$(find xacro)/xacro --inorder $(find ov_msckf)/gazebo_models/urdf/turtlebot3_waffle_openvins.urdf.xacro" />
+    <node pkg="robot_state_publisher" type="robot_state_publisher"
+          name="robot_state_publisher">
+      <param name="publish_frequency" type="double" value="50.0" />
+    </node>
+    <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
+          args="-urdf -model turtlebot3 -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
+
+    <!-- 1c. Pseudo-Stereo: RGB + Depth → virtual right camera -->
+    <!--     UNCHANGED from turtlebot3_house_stereo.launch -->
+    <node name="pseudo_stereo" pkg="ov_msckf" type="pseudo_stereo.py" output="screen">
+      <param name="baseline" value="0.08"/>
+    </node>
+
+    <!-- 1d. OpenVINS Stereo VIO -->
+    <!--     UNCHANGED from turtlebot3_house_stereo.launch -->
+    <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf"
+          output="screen" clear_params="true" required="false">
+      <param name="verbosity"   type="string" value="DEBUG" />
+      <param name="config_path" type="string"
+             value="$(find ov_msckf)/../config/rgbd_stereo/estimator_config.yaml" />
+      <param name="use_stereo"  type="bool"   value="true" />
+      <param name="max_cameras" type="int"    value="2" />
+      <param name="publish_global_to_imu_tf" type="bool" value="false" />
+    </node>
+  </group>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 2: Map → PointCloud                                             -->
+  <!-- ======================================================================== -->
+  <!-- 2a. map_server — serves our offline-built 2D occupancy grid map         -->
+  <!--     Uses map_server from ROS navigation stack (UNCHANGED).              -->
+  <node name="map_server" pkg="map_server" type="map_server"
+        args="$(arg map_file)" output="screen"/>
+
+  <!-- 2b. map_to_pc2 — converts 2D OccupancyGrid to 3D PointCloud2            -->
+  <!--     This is ego-planner's original map_to_pc2.py (UNCHANGED).           -->
+  <!--     It calls /static_map service, extrudes occupied cells vertically    -->
+  <!--     (Z: -0.2m ~ 1.2m), and publishes /map_generator/global_cloud        -->
+  <node name="map_to_pc2" pkg="map_tools" type="map_to_pc2.py"
+        output="screen" respawn="true">
+    <param name="frame_id" value="map"/>
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 3: VIO → ego-planner Odometry Bridge (NEW FILE)                  -->
+  <!-- ======================================================================== -->
+  <!--
+    BRIDGE NODE — the only new code in this integration.
+
+    Subscribes:  /ov_msckf/odomimu    (nav_msgs/Odometry, global->imu)
+    Publishes:   /odom_world          (nav_msgs/Odometry, odom->base_footprint)
+    Publishes:   TF odom->base_footprint (dynamic, 50 Hz)
+
+    Transforms the VIO IMU pose to base_footprint by applying the fixed
+    -0.078 m Z offset (IMU is 0.078 m above base_footprint per URDF).
+    The orientation is copied directly (IMU and base_footprint share the
+    same orientation since there is no relative rotation).
+  -->
+  <node name="vio_odom_bridge" pkg="ov_msckf" type="vio_odom_bridge.py"
+        output="screen">
+    <param name="odom_frame"    value="odom"/>
+    <param name="robot_frame"   value="base_footprint"/>
+    <param name="publish_rate"  value="50.0"/>
+    <param name="imu_to_base_z" value="-0.078"/>
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 4: TF Setup                                                     -->
+  <!-- ======================================================================== -->
+  <!--
+    GOAL: Let ego-planner see a TF tree where "odom" is a fixed world frame
+    and base_footprint moves within it (same semantic as fake_odom).
+
+    Chain: map (identity) to global (identity) to odom (VIO) to base_footprint
+
+    WHY USE /tf (NOT /tf_static):
+      Multiple static_transform_publishers to /tf_static overwrite each other
+      (latched topic — last publisher wins).  We use /tf with 100 ms period
+      to ensure all transforms are always available.
+  -->
+
+  <!-- 4a. map → global (static identity).  Our offline map was built in       -->
+  <!--     VIO's "global" frame, so the map's "map" frame IS the global frame. -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_global"
+        args="0 0 0 0 0 0 map global 100" />
+
+  <!-- 4b. global → odom (static identity).  ego-planner treats "odom" as its  -->
+  <!--     fixed world frame.  Since map=global=odom, the robot's /odom_world  -->
+  <!--     position equals its VIO position in the map.                         -->
+  <node pkg="tf" type="static_transform_publisher" name="global_to_odom"
+        args="0 0 0 0 0 0 global odom 100" />
+
+  <!-- 4c. world frame (optional).  Some ego-planner visualization nodes use   -->
+  <!--     the "world" frame for RViz markers.  Identity from map covers this. -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_world"
+        args="0 0 0 0 0 0 map world 100" />
+
+  <!-- 4d. IMU → base_footprint (static offset).  From the URDF: IMU is        -->
+  <!--     0.078 m above base_footprint (0.068 m above base_link + 0.01 m).    -->
+  <node pkg="tf" type="static_transform_publisher" name="imu_to_base"
+        args="0 0 -0.078 0 0 0 imu base_footprint 100" />
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 5: EGO-Planner Navigation Stack                                  -->
+  <!-- ======================================================================== -->
+  <!--
+    All three nodes below are UNCHANGED from ego-planner.
+    They are launched exactly as they would be in ego-planner's own
+    run_in_sim.launch, except we provide /odom_world from VIO instead
+    of from fake_odom.
+
+    Topic protocol (verified against ego-planner binary symbols):
+      waypoint_generator:  sub: ~goal (→ /move_base_simple/goal)
+                                 ~odom (→ /odom_world)
+                           pub: ~waypoints (→ /waypoint_generator/waypoints)
+
+      ego_planner_node:    sub: /odom_world
+                                 /map_generator/global_cloud
+                                 /waypoint_generator/waypoints
+                           pub: /planning/bspline (ego_planner/Bspline)
+
+      traj_server:         sub: /planning/bspline
+                                 /odom_world
+                           pub: /cmd_vel (geometry_msgs/Twist)
+  -->
+
+  <!-- 5a. Waypoint Generator — converts RViz "2D Nav Goal" to Path messages  -->
+  <!--     Remaps match the ZJU-FAST-Lab run_in_sim.launch convention.         -->
+  <node name="waypoint_generator" pkg="waypoint_generator"
+        type="waypoint_generator" output="screen">
+    <remap from="~goal"   to="/move_base_simple/goal"/>
+    <remap from="~odom"   to="/odom_world"/>
+    <param name="waypoint_type" value="manual-lonely-waypoint"/>
+  </node>
+
+  <!-- 5b. EGO-Planner Core — A* global path + B-spline local optimization    -->
+  <!--     fsm/use_sim_mode=false → ground robot mode (not drone simulation)   -->
+  <node name="ego_planner_node" pkg="ego_planner" type="ego_planner_node"
+        output="screen" required="true">
+    <param name="fsm/use_sim_mode"           value="false"/>
+    <param name="fsm/planning_horizon"       value="5.0"/>
+    <param name="fsm/planning_horizen_time"  value="5.0"/>
+    <param name="fsm/fixed_z_height"         value="0.2"/>
+    <param name="fsm/waypoint_num"           value="1"/>
+  </node>
+
+  <!-- 5c. Trajectory Server — B-spline → Twist for ground robot chassis     -->
+  <!--     Pure-pursuit controller with lookahead.                            -->
+  <node name="traj_server" pkg="ego_planner" type="traj_server" output="screen">
+    <param name="traj_server/max_linear_vel"     value="0.5"/>
+    <param name="traj_server/max_angular_vel"    value="1.0"/>
+    <param name="traj_server/acc_limit"          value="0.8"/>
+    <param name="traj_server/angular_acc_limit"  value="2.0"/>
+    <param name="traj_server/lookahead_time"     value="0.6"/>
+    <param name="traj_server/k_linear"           value="1.0"/>
+    <param name="traj_server/k_angular"          value="1.0"/>
+    <param name="traj_server/goal_tolerance"     value="0.25"/>
+    <param name="traj_server/fixed_z"            value="0.0"/>
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 6: RViz                                                         -->
+  <!-- ======================================================================== -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)"
+        output="screen" required="false"/>
+
+</launch>

@@ -1,0 +1,3 @@
+[submodule "ego-planner"]
+	path = ego-planner
+	url = git@github.com:windriver4869/ego-md.git

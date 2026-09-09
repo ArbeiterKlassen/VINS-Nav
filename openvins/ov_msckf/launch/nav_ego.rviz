@@ -1,0 +1,65 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Displays:
+    - Class: rviz/Map
+      Name: Map
+      Topic: /map
+      Alpha: 0.7
+      Color Scheme: map
+      Draw Behind: false
+    - Class: rviz/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.3
+    - Class: rviz/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Robot Description: robot_description
+      Visual Enabled: true
+    - Class: rviz/Marker
+      Name: EGO Planner
+      Topic: /ego_planner_node/planning/bspline
+      Enabled: true
+    - Class: rviz/Marker
+      Name: Global Path
+      Topic: /ego_planner_node/global_list
+      Enabled: true
+    - Class: rviz/Path
+      Name: Waypoints
+      Topic: /waypoint_generator/waypoints
+      Enabled: true
+      Color: 0; 255; 0
+    - Class: rviz/Odometry
+      Name: VIO Odometry
+      Topic: /odom_world
+      Enabled: true
+      Keep: 100
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/SetInitialPose
+      Topic: /initialpose
+    - Class: rviz/SetGoal
+      Topic: /move_base_simple/goal
+  Views:
+    Current:
+      Class: rviz/TopDownOrtho
+      Name: TopDownOrtho
+      Near Clip Distance: 0.01
+      Scale: 30
+      Target Frame: map
+      Value: TopDownOrtho (rviz)
+      Zoom: 0.5
+    Saved:
+      - Class: rviz/Orbit
+        Name: Orbit
+        Target Frame: map

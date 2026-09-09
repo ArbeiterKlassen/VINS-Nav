@@ -1,0 +1,236 @@
+<launch>
+  <!-- ============================================================================
+       nav_ego_rtabmap.launch — ONE-SESSION: Drive → Map → Navigate
+
+       WORKFLOW:
+         1. Launch this file (VIO + RTAB-Map + ego-planner all at once)
+         2. Drive the robot around with keyboard teleop to build the map
+         3. Observe the map in RViz (RTAB-Map's live grid_map → /map)
+         4. When satisfied, stop driving — the map is already live
+         5. In RViz, use "2D Nav Goal" to click a destination
+         6. ego-planner computes trajectory → /cmd_vel → robot moves
+
+       WHY THIS WORKS:
+         - RTAB-Map provides online map→odom localization correction
+         - VIO provides odom→base_footprint tracking
+         - rtabmap_map_relay bridges RTAB-Map's live grid_map to /static_map
+         - map_to_pc2 converts it to PointCloud2 for ego-planner's ESDF
+         - All in one session — no saving, no restarting
+
+       TF TREE:
+         map ──(RTAB-Map, dynamic)──→ odom
+         odom ──(VIO bridge, dynamic)──→ base_footprint
+         base_footprint ──(URDF)──→ base_link → imu_link, camera_link
+
+       TOPICS:
+         /ov_msckf/odomimu  (VIO)  ──→ vio_odom_bridge ──→ /odom_world
+         /rtabmap/grid_map   ──→ rtabmap_map_relay ──→ /map + /static_map
+         /map                ──→ map_to_pc2 ──→ /map_generator/global_cloud
+         RViz "2D Nav Goal"  ──→ waypoint_generator ──→ /waypoint_generator/waypoints
+         /map_generator/global_cloud + /odom_world + waypoints ──→ ego_planner_node
+         /planning/bspline ──→ traj_server ──→ /cmd_vel ──→ Gazebo
+
+       USAGE:
+         source ~/VINS-Nav/setup_ego_vio.sh
+         roslaunch ov_msckf nav_ego_rtabmap.launch
+         # In another terminal: roslaunch turtlebot3_teleop turtlebot3_teleop_key.launch
+         # Drive, then set navigation goals in RViz
+
+       ============================================================================ -->
+
+  <!-- ====== Arguments ====== -->
+  <arg name="model"     default="waffle"/>
+  <arg name="x_pos"     default="-3.0"/>
+  <arg name="y_pos"     default="1.0"/>
+  <arg name="z_pos"     default="0.0"/>
+  <arg name="rviz"      default="true"/>
+  <env name="TURTLEBOT3_MODEL" value="$(arg model)"/>
+
+  <param name="/use_sim_time" value="true"/>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 1: Gazebo + Robot Model                                         -->
+  <!-- ======================================================================== -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name"  value="$(find turtlebot3_gazebo)/worlds/turtlebot3_house.world"/>
+    <arg name="paused"      value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui"         value="true"/>
+    <arg name="headless"    value="false"/>
+    <arg name="debug"       value="false"/>
+  </include>
+
+  <param name="robot_description"
+         command="$(find xacro)/xacro --inorder $(find ov_msckf)/gazebo_models/urdf/turtlebot3_waffle_openvins.urdf.xacro" />
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+    <param name="publish_frequency" type="double" value="50.0" />
+  </node>
+  <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
+        args="-urdf -model turtlebot3 -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 2: Pseudo-Stereo + OpenVINS VIO                                 -->
+  <!-- ======================================================================== -->
+  <node name="pseudo_stereo" pkg="ov_msckf" type="pseudo_stereo.py" output="screen">
+    <param name="baseline" value="0.08"/>
+  </node>
+
+  <node name="ov_msckf" pkg="ov_msckf" type="run_subscribe_msckf"
+        output="screen" clear_params="true" required="false">
+    <param name="verbosity"   type="string" value="WARNING" />
+    <param name="config_path" type="string"
+           value="$(find ov_msckf)/../config/rgbd_stereo/estimator_config.yaml" />
+    <param name="use_stereo"  type="bool"   value="true" />
+    <param name="max_cameras" type="int"    value="2" />
+    <param name="publish_global_to_imu_tf" type="bool" value="false" />
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 3: RTAB-Map (online mapping + localization)                      -->
+  <!-- ======================================================================== -->
+  <group ns="rtabmap">
+    <node name="rtabmap" pkg="rtabmap_slam" type="rtabmap" output="screen"
+          args="--delete_db_on_start">
+      <!-- frame_id = robot frame, odom_frame_id = VIO odometry parent frame -->
+      <param name="frame_id"             type="string" value="base_footprint"/>
+      <param name="odom_frame_id"        type="string" value="global"/>
+      <param name="subscribe_depth"      type="bool"   value="true"/>
+      <param name="subscribe_scan"       type="bool"   value="false"/>
+      <param name="approx_sync"          type="bool"   value="true"/>
+      <param name="wait_for_transform_duration" type="double" value="0.2"/>
+      <param name="subscribe_odom_info"  type="bool"   value="false"/>
+      <param name="odom_sensor_sync"     type="bool"   value="false"/>
+      <param name="gen_scan"             type="bool"   value="false"/>
+      <param name="gen_depth"            type="bool"   value="false"/>
+      <param name="RGBD/NeighborLinkRefining"  type="string" value="true"/>
+      <param name="RGBD/ProximityBySpace"      type="string" value="true"/>
+      <param name="RGBD/AngularUpdate"         type="string" value="0.01"/>
+      <param name="RGBD/LinearUpdate"          type="string" value="0.01"/>
+      <param name="RGBD/OptimizeFromGraphEnd"  type="string" value="false"/>
+      <param name="Reg/Strategy"               type="string" value="0"/>
+      <param name="Grid/FromDepth"             type="string" value="true"/>
+      <param name="Grid/RangeMax"              type="string" value="20"/>
+      <param name="Grid/CellSize"              type="string" value="0.05"/>
+      <param name="Grid/MapFrameProjection"    type="string" value="true"/>
+      <param name="Grid/GlobalFullMap"         type="string" value="true"/>
+      <!-- RTAB-Map subscribes to VIO odometry as its odom source -->
+      <remap from="rgb/image"       to="/camera/rgb/image_raw"/>
+      <remap from="depth/image"     to="/camera/depth/image_raw"/>
+      <remap from="rgb/camera_info" to="/camera/rgb/camera_info"/>
+      <remap from="odom"            to="/ov_msckf/odomimu"/>
+    </node>
+  </group>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 4: TF Setup                                                     -->
+  <!-- ======================================================================== -->
+  <!--
+    TF CHAIN:
+      map ──(RTAB-Map, dynamic)──→ odom
+          RTAB-Map publishes /rtabmap/mapData containing map→odom correction.
+          map_tf_broadcaster reads it and publishes the map→odom TF at 10 Hz.
+
+      odom ──(VIO bridge, dynamic)──→ base_footprint
+          vio_odom_bridge reads /ov_msckf/odomimu, applies imu→base_footprint
+          Z offset, and publishes odom→base_footprint TF + /odom_world.
+
+      base_footprint ──(URDF, robot_state_publisher)──→ base_link → imu_link, camera_link
+
+    AUXILIARY TF (for compatibility):
+      global → odom  (static identity — RTAB-Map's mapToOdom corrects global→map)
+      imu → base_footprint (static Z=-0.078 — fallback if VIO bridge not yet publishing)
+  -->
+
+  <!-- RTAB-Map mapData → map→odom TF (dynamic localization correction) -->
+  <node name="map_tf_broadcaster" pkg="ov_msckf" type="map_tf_broadcaster.py"
+        output="screen" />
+
+  <!-- global → odom  (static identity) — required because RTAB-Map's odom_frame_id=global -->
+  <node pkg="tf" type="static_transform_publisher" name="global_to_odom"
+        args="0 0 0 0 0 0 global odom 100" />
+
+  <!-- imu → base_footprint  (static, Z offset from URDF) -->
+  <node pkg="tf" type="static_transform_publisher" name="imu_to_base"
+        args="0 0 -0.078 0 0 0 imu base_footprint 100" />
+
+  <!-- Static odom → base_footprint FALLBACK (before VIO publishes dynamic TF) -->
+  <!-- The dynamic vio_odom_bridge will override this once VIO initializes -->
+  <node pkg="tf" type="static_transform_publisher" name="odom_base_fallback"
+        args="0 0 -0.078 0 0 0 odom base_footprint 100" />
+
+  <!-- world frame (RViz compatibility, optional) -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_world"
+        args="0 0 0 0 0 0 map world 100" />
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 5: VIO → ego-planner Odometry Bridge                            -->
+  <!-- ======================================================================== -->
+  <node name="vio_odom_bridge" pkg="ov_msckf" type="vio_odom_bridge.py"
+        output="screen">
+    <param name="odom_frame"    value="odom"/>
+    <param name="robot_frame"   value="base_footprint"/>
+    <param name="publish_rate"  value="50.0"/>
+    <param name="imu_to_base_z" value="-0.078"/>
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 6: Map Bridge — RTAB-Map live grid → /map + /static_map          -->
+  <!-- ======================================================================== -->
+  <!--
+    RTAB-Map publishes /rtabmap/grid_map but not /static_map or /map.
+    This relay bridges the gap so map_to_pc2 and ego_planner's GridMap
+    can receive the live-updating occupancy grid.
+  -->
+  <node name="rtabmap_map_relay" pkg="ov_msckf" type="rtabmap_map_relay.py"
+        output="screen" />
+
+  <!-- Convert live map to PointCloud2 for ego-planner's ESDF -->
+  <node name="map_to_pc2" pkg="map_tools" type="map_to_pc2.py"
+        output="screen" respawn="true">
+    <param name="frame_id" value="map"/>
+    <!-- Re-fetch live-updating RTAB-Map grid every 2 seconds -->
+    <param name="refresh_interval" value="2.0"/>
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 7: EGO-Planner Navigation Stack                                  -->
+  <!-- ======================================================================== -->
+  <!-- Waypoint generator: receives RViz "2D Nav Goal" → publishes Path -->
+  <node name="waypoint_generator" pkg="waypoint_generator"
+        type="waypoint_generator" output="screen">
+    <remap from="~goal" to="/move_base_simple/goal"/>
+    <remap from="~odom" to="/odom_world"/>
+    <param name="waypoint_type" value="manual-lonely-waypoint"/>
+  </node>
+
+  <!-- Core planner: A* + B-spline optimization with ESDF collision checking -->
+  <node name="ego_planner_node" pkg="ego_planner" type="ego_planner_node"
+        output="screen" required="true">
+    <param name="fsm/use_sim_mode"           value="false"/>
+    <param name="fsm/planning_horizon"       value="5.0"/>
+    <param name="fsm/planning_horizen_time"  value="5.0"/>
+    <param name="fsm/fixed_z_height"         value="0.2"/>
+    <param name="fsm/waypoint_num"           value="1"/>
+  </node>
+
+  <!-- Trajectory server: B-spline → Twist (/cmd_vel) -->
+  <node name="traj_server" pkg="ego_planner" type="traj_server" output="screen">
+    <param name="traj_server/max_linear_vel"     value="0.5"/>
+    <param name="traj_server/max_angular_vel"    value="1.0"/>
+    <param name="traj_server/acc_limit"          value="0.8"/>
+    <param name="traj_server/angular_acc_limit"  value="2.0"/>
+    <param name="traj_server/lookahead_time"     value="0.6"/>
+    <param name="traj_server/k_linear"           value="1.0"/>
+    <param name="traj_server/k_angular"          value="1.0"/>
+    <param name="traj_server/goal_tolerance"     value="0.25"/>
+    <param name="traj_server/fixed_z"            value="0.0"/>
+  </node>
+
+  <!-- ======================================================================== -->
+  <!-- SECTION 8: RViz                                                         -->
+  <!-- ======================================================================== -->
+  <node if="$(arg rviz)" name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find ov_msckf)/launch/nav_ego.rviz"
+        output="screen" required="false"/>
+
+</launch>
