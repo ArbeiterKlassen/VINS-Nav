@@ -673,6 +673,36 @@ RTAB-Map 依赖此变换跟踪机器人运动——静态 TF 会锁定机器人�
 必须用 `tf2_ros.TransformBroadcaster`——直接往 `/tf` 发裸 `TransformStamped`
 **不会**构成合法的 `tf2_msgs/TFMessage`，TF2 会静默丢弃。
 
+### `live_mapper.py` — 在线建图器（离线质量的栅格）
+
+把 `build_map.py` 的做法搬到在线，因为 RTAB-Map 的栅格投影会把墙打碎
+（见 §RTAB-Map 栅格参数）。同样的按高度分墙面/地面、同样的命中累积、
+同样的帧/像素抽样——但位姿来自实时里程计。
+
+**输入:** `/camera/depth/image_raw`, `/camera/rgb/camera_info`, 位姿源
+**输出:** `/map`（锁存）+ `/service /static_map`
+
+位姿源用 `~pose_source` 选择：
+
+| 值 | 含义 |
+|---|---|
+| `odom`（默认） | 使用 `/ov_msckf/odomimu`——实时 VIO |
+| `tf` | 从 TF 查 `global→imu`——可跑在录制的轨迹上 |
+
+**映射器本身没问题的证据，以及真正的限制在哪** —— 同一个 400 秒窗口：
+
+| 配置 | 障碍格 | 自由格 |
+|------|--------|--------|
+| `build_map.py` 离线 | 5,416 | 10,595 |
+| `live_mapper` + bag 原始位姿（`pose_source:=tf`） | **5,589** | **10,535** |
+| `live_mapper` + 回放 VIO 位姿 | 13,211 | 4,147 |
+
+**给定相同位姿，在线映射器几乎完全复现离线地图，说明算法是对的。**
+差距来自**位姿源**：bag 回放只给 VIO 16.7 Hz 的图像（录制速率），而实时运行时
+它有约 28 Hz，所以回放出的轨迹明显更差（t=286–372s 路径长度：回放是轮式真值的
+0.82 倍，原始录制是 1.07 倍）。在实时会话中（也就是实际用法），VIO 拿到的是
+全速率数据流，映射器自然能拿到好位姿。
+
 ### `rtabmap_map_relay.py` — 实时地图转发
 
 把 RTAB-Map 的实时占据栅格桥接到 EGO-Planner 需要的接口。

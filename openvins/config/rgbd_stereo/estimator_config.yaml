@@ -28,7 +28,10 @@ feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
 # zero velocity update parameters we can use
 # we support either IMU-based or disparity detection.
 try_zupt: true
-zupt_chi2_multipler: 1.0 # both chi2 AND disparity must pass (0 = disparity-only, can accept a false ZUPT)
+# set to 0 for only disp-based. MEASURED: raising this to 1.0 makes the VIO
+# under-estimate motion ~2x (path vs wheel odometry over t=286-372 s:
+# 0.519 with chi2=1.0 vs 0.820 with chi2=0; the original recording scores 1.068).
+zupt_chi2_multipler: 0
 zupt_max_velocity: 0.1
 zupt_noise_multiplier: 10
 zupt_max_disparity: 0.5 # set to 0 for only imu-based

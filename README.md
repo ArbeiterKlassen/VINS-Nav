@@ -687,6 +687,37 @@ are forwarded so downstream nodes can gauge localization quality.
 Uses `tf2_ros.TransformBroadcaster` — publishing a bare `TransformStamped` to `/tf`
 does **not** produce a valid `tf2_msgs/TFMessage` and TF2 silently ignores it.
 
+### `live_mapper.py` — Online Mapper (offline-quality grid)
+
+Reimplements `build_map.py`'s approach online, because RTAB-Map's grid projection
+fragments walls (see §RTAB-Map grid parameters). Same height-based wall/floor split,
+same hit accumulation, same frame/pixel subsampling — but fed by the live odometry.
+
+**Input:** `/camera/depth/image_raw`, `/camera/rgb/camera_info`, pose source
+**Output:** `/map` (latched) + `/static_map` service
+
+Pose source is selectable with `~pose_source`:
+
+| value | meaning |
+|-------|---------|
+| `odom` (default) | use `/ov_msckf/odomimu` — the live VIO |
+| `tf` | look up `global→imu` in TF — lets it run on a recorded trajectory |
+
+**Proof that the mapper is sound, and where the limit actually is** — same 400 s window:
+
+| configuration | occupied | free |
+|---------------|----------|------|
+| `build_map.py` offline | 5,416 | 10,595 |
+| `live_mapper` with the bag's own poses (`pose_source:=tf`) | **5,589** | **10,535** |
+| `live_mapper` with the replay's VIO poses | 13,211 | 4,147 |
+
+Given the same poses the online mapper reproduces the offline map almost exactly, so
+the algorithm is correct. The gap comes from the **pose source**: a bag replay feeds
+VIO only 16.7 Hz of imagery (the recorded rate) versus the ~28 Hz it saw live, and the
+resulting trajectory is measurably worse (path length over t=286–372 s: 0.82× wheel
+odometry for the replay vs 1.07× for the original run). In a live session — the
+intended use — VIO gets the full-rate stream, so the mapper gets good poses.
+
 ### `rtabmap_map_relay.py` — Live Map Relay
 
 Bridges RTAB-Map's live occupancy grid to the interfaces EGO-Planner needs.
