@@ -427,6 +427,34 @@ source ~/VINS-Nav/setup_ego_vio.sh
 roslaunch ov_msckf nav_ego_vio.launch gazebo:=true map_file:=/path/to/map.yaml
 ```
 
+### 5. Replay a recorded bag (no Gazebo)
+
+The same stack runs against a recorded bag — VIO re-runs live on the replayed
+camera/IMU stream, so no simulator is needed:
+
+```bash
+# Terminal 1: VIO + RTAB-Map + EGO-Planner, no Gazebo
+source ~/VINS-Nav/setup_ego_vio.sh
+roslaunch ov_msckf nav_ego_rtabmap.launch gazebo:=false rviz:=false
+
+# Terminal 2: replay ONLY sensor topics + clock
+rosbag play ~/house_full.bag --clock \
+  --topics /camera/rgb/image_raw /camera/depth/image_raw \
+           /camera/rgb/camera_info /imu /clock
+```
+
+**Do not replay `/tf` or `/tf_static`.** The bag's TF was produced by the original
+session's odometry and would fight the live `odom → base_footprint` published by
+`vio_odom_bridge.py`, producing conflicting transforms on the same edge.
+
+Two gotchas when testing this way:
+
+- Publish navigation goals with a **persistent** publisher. A one-shot
+  `rostopic pub -1` can be dropped before the subscriber connection is established;
+  `waypoint_generator` then silently never fires. RViz's "2D Nav Goal" is fine.
+- Expect **VIO drift**. `pseudo_stereo` is the throughput bottleneck (see
+  §Performance), so the estimator receives far fewer stereo frames than it needs.
+
 ---
 
 ## EGO-Planner Integration
@@ -749,6 +777,20 @@ docs/openvins_egoplanner.md  # Full integration report (architecture + debugging
 | OV tracking rate | 100–300Hz | Varies with camera/IMU ratio |
 | Bag→map processing | ~5 min | 35GB bag, 27M point cloud |
 
+**Pseudo-stereo throughput is the system bottleneck** (measured 2026-09-09, isolated
+VIO-only replay of `house_full.bag`, so CPU contention is excluded):
+
+| Stage | Cost per 640×480 frame |
+|-------|------------------------|
+| Row-wise forward warp | 62.9 ms |
+| `cv2.inpaint(INPAINT_NS)` | **223.0 ms** |
+| **Total** | **285.9 ms → 3.5 Hz ceiling** |
+
+The recorded depth is only 54.8% valid, so the inpainting mask is large and
+Navier-Stokes inpainting dominates. VIO wants ~28 Hz stereo pairs and gets ~3.5 Hz,
+which degrades tracking, accumulates drift, and eventually produces NaN poses. This is
+the root cause of the "map splits and needs manual `corr_dx`/`corr_dy`" symptom.
+
 EGO-Planner stack (launch-tested; full closed-loop navigation depends on VIO quality):
 
 | Metric | Value | Notes |
@@ -827,6 +869,34 @@ EGO-Planner stack (launch-tested; full closed-loop navigation depends on VIO qua
   Also expected in a dry-run test.
 - Fix: start the VIO (or replay a bag) and confirm `rostopic hz /odom_world` is non-zero.
   VIO needs a few stationary seconds for ZUPT initialization first.
+
+### A bridge/relay node starts and logs "ready", but its topic has no data
+- Cause: the node crashed in `__init__` *after* registering with the master. A classic
+  instance: `NameError: name 'tf2_ros' is not defined` — the process exits in
+  milliseconds, so `rosnode list` briefly shows it and the launch log looks fine.
+- Fix: always verify with `rostopic hz <topic>`, not with "the node started".
+  Check the node's own log file under `~/.ros/log/<run>/` for a traceback, and note
+  that `rospy.Timer.run()` does **not** wrap callbacks in try/except — an exception in
+  a timer callback kills the timer thread silently.
+
+### `/map_tf_broadcaster` dies with `ROSTimeMovedBackwardsException`
+- Cause: `rospy.Rate.sleep()` raises when `/clock` jumps (bag replay start/stop).
+- Fix: catch `ROSTimeMovedBackwardsException` and rebuild the `rospy.Rate` against the
+  new clock (already handled in `map_tf_broadcaster.py`).
+
+### `waypoint_generator` receives a goal but never publishes a waypoint
+- Cause: the goal was sent with a one-shot publisher (`rostopic pub -1`); the message
+  can be dropped before the subscriber connection is established, and the callback
+  never fires.
+- Fix: keep the publisher alive (RViz "2D Nav Goal" does this naturally), or publish
+  repeatedly for a few seconds. Verify the connection exists with
+  `rosnode info /waypoint_generator` while the publisher is running.
+
+### TF warnings `TF_DENORMALIZED_QUATERNION ... (nan nan nan nan)`
+- Cause: VIO lost tracking and is emitting NaN poses — usually because
+  `pseudo_stereo` is starving it of stereo frames (see §Performance).
+- Fix: check `/camera/right/image_raw` rate with `rostopic hz`; if it is a few Hz
+  instead of ~28 Hz, fix the pseudo-stereo bottleneck first.
 
 ## Blog
 

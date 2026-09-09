@@ -43,6 +43,7 @@ TOPICS
 """
 
 import rospy
+import tf2_ros
 import tf.transformations as tft
 import numpy as np
 from geometry_msgs.msg import TransformStamped
@@ -98,6 +99,15 @@ class VIOOdomBridge:
 
     # ------------------------------------------------------------------
     def timer_cb(self, event):
+        # rospy's Timer.run() does NOT wrap the callback in try/except: an
+        # exception here kills the timer thread silently and the topic goes
+        # dead with no log entry. Guard the whole body.
+        try:
+            self._timer_body()
+        except Exception as e:  # noqa: BLE001 - must never kill the timer
+            rospy.logerr_throttle(5.0, "vio_odom_bridge timer error: %s", e)
+
+    def _timer_body(self):
         if self.latest_vio is None:
             return
 

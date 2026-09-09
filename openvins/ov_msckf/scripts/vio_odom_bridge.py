@@ -43,6 +43,7 @@ TOPICS
 """
 
 import rospy
+import tf2_ros
 import tf.transformations as tft
 import numpy as np
 from geometry_msgs.msg import TransformStamped
@@ -60,9 +61,9 @@ class VIOOdomBridge:
         # Z-offset from IMU to base_footprint (negative = base_footprint below IMU)
         self.imu_to_base_z = rospy.get_param("~imu_to_base_z", -0.078)
 
-        # ---- publisher ----
+        # ---- publishers ----
         self.odom_pub = rospy.Publisher("/odom_world", Odometry, queue_size=10)
-        self.tf_pub = rospy.Publisher("/tf", rospy.AnyMsg, queue_size=100)
+        self.tf_br = tf2_ros.TransformBroadcaster()  # proper tf2_msgs/TFMessage
 
         # ---- subscriber ----
         self.latest_vio = None
@@ -98,6 +99,15 @@ class VIOOdomBridge:
 
     # ------------------------------------------------------------------
     def timer_cb(self, event):
+        # rospy's Timer.run() does NOT wrap the callback in try/except: an
+        # exception here kills the timer thread silently and the topic goes
+        # dead with no log entry. Guard the whole body.
+        try:
+            self._timer_body()
+        except Exception as e:  # noqa: BLE001 - must never kill the timer
+            rospy.logerr_throttle(5.0, "vio_odom_bridge timer error: %s", e)
+
+    def _timer_body(self):
         if self.latest_vio is None:
             return
 
@@ -159,7 +169,7 @@ class VIOOdomBridge:
         tf_msg.transform.rotation.y = q_base[1]
         tf_msg.transform.rotation.z = q_base[2]
         tf_msg.transform.rotation.w = q_base[3]
-        self.tf_pub.publish(tf_msg)
+        self.tf_br.sendTransform(tf_msg)
 
 
 # ======================================================================

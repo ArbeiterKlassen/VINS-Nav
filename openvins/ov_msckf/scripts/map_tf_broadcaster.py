@@ -63,7 +63,14 @@ class MapTFBroadcaster:
             if self.latest:
                 self.latest.header.stamp = rospy.Time.now()
                 self.br.sendTransform(self.latest)
-            self.rate.sleep()
+            try:
+                self.rate.sleep()
+            except rospy.exceptions.ROSTimeMovedBackwardsException:
+                # Happens when a bag replay starts/ends and /clock jumps.
+                # Rebuild the rate against the new clock instead of dying.
+                self.rate = rospy.Rate(10)
+            except rospy.ROSInterruptException:
+                break
 
 if __name__ == '__main__':
     rospy.init_node('map_tf_broadcaster')

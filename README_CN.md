@@ -430,6 +430,31 @@ source ~/VINS-Nav/setup_ego_vio.sh
 roslaunch ov_msckf nav_ego_vio.launch gazebo:=true map_file:=/path/to/map.yaml
 ```
 
+### 第六步：回放录制的 bag（不用 Gazebo）
+
+同一套栈也能直接跑在录制的 bag 上——VIO 在回放的相机/IMU 流上实时重跑，不需要仿真器：
+
+```bash
+# 终端 1：VIO + RTAB-Map + EGO-Planner，不启动 Gazebo
+source ~/VINS-Nav/setup_ego_vio.sh
+roslaunch ov_msckf nav_ego_rtabmap.launch gazebo:=false rviz:=false
+
+# 终端 2：只回放传感器话题和时钟
+rosbag play ~/house_full.bag --clock \
+  --topics /camera/rgb/image_raw /camera/depth/image_raw \
+           /camera/rgb/camera_info /imu /clock
+```
+
+**绝对不要回放 `/tf` 和 `/tf_static`。** bag 里的 TF 是原始会话的里程计产生的，
+会和 `vio_odom_bridge.py` 实时发布的 `odom → base_footprint` 在同一条边上冲突。
+
+这样测试时有两个坑：
+
+- 发导航目标要用**持续发布**的发布者。一次性 `rostopic pub -1` 可能在订阅连接建立
+  之前就被丢弃，`waypoint_generator` 于是静默地永不触发。RViz 的 "2D Nav Goal" 没这个问题。
+- 要预期 **VIO 漂移**。`pseudo_stereo` 是吞吐瓶颈（见 §性能指标），
+  估计器拿到的立体帧数远低于所需。
+
 ---
 
 ## EGO-Planner 集成
@@ -741,6 +766,18 @@ docs/openvins_egoplanner.md  # 完整集成报告（原理 + 调试记录）
 | OV 跟踪频率 | 100–300Hz | 随相机/IMU 比例变化 |
 | Bag→地图处理 | ~5 分钟 | 35GB bag, 27M 点云 |
 
+**伪双目吞吐是整个系统的瓶颈**（2026-09-09 实测：只跑 VIO 的隔离回放，排除 CPU 争抢）：
+
+| 阶段 | 每帧 640×480 耗时 |
+|------|-------------------|
+| 逐行前向 warp | 62.9 ms |
+| `cv2.inpaint(INPAINT_NS)` | **223.0 ms** |
+| **合计** | **285.9 ms → 上限 3.5 Hz** |
+
+录制的深度图只有 54.8% 有效像素，掩膜很大，Navier-Stokes inpainting 因此占绝对主导。
+VIO 需要约 28 Hz 的立体帧，实际只有 3.5 Hz，导致跟踪退化、漂移累积，
+最终输出 NaN 位姿。这正是「地图分离、需要手动 `corr_dx`/`corr_dy`」的根因。
+
 EGO-Planner 栈（启动测试数据；完整闭环导航效果取决于 VIO 质量）：
 
 | 指标 | 数值 | 备注 |
@@ -814,6 +851,31 @@ EGO-Planner 栈（启动测试数据；完整闭环导航效果取决于 VIO 质
 - 原因：它在等 `/odom_world` 上的里程计；没有 VIO 在跑自然没有数据。干跑测试时同样如此。
 - 解决：启动 VIO（或回放 bag），确认 `rostopic hz /odom_world` 非零。
   VIO 本身需要先静止几秒完成 ZUPT 初始化。
+
+### 桥接/转发节点打印了 "ready"，但话题里没有数据
+- 原因：节点在 `__init__` 中、注册到 master **之后**崩溃了。典型例子：
+  `NameError: name 'tf2_ros' is not defined`——进程几毫秒内就退出，
+  `rosnode list` 会短暂显示它，启动日志看起来也正常。
+- 解决：一律用 `rostopic hz <话题>` 验证，不要用「节点起来了」当证据。
+  到 `~/.ros/log/<本次运行>/` 下看该节点自己的日志找 traceback。
+  另外注意 `rospy.Timer.run()` **不会**捕获回调异常——定时器回调里抛错会静默杀死定时器线程。
+
+### `/map_tf_broadcaster` 因 `ROSTimeMovedBackwardsException` 退出
+- 原因：`/clock` 跳变（bag 回放开始/结束）时 `rospy.Rate.sleep()` 会抛异常。
+- 解决：捕获 `ROSTimeMovedBackwardsException` 并基于新时钟重建 `rospy.Rate`
+  （`map_tf_broadcaster.py` 中已处理）。
+
+### `waypoint_generator` 收到了目标却从不发布 waypoint
+- 原因：目标是用一次性发布器（`rostopic pub -1`）发的，消息可能在订阅连接建立前
+  就被丢弃，回调根本没触发。
+- 解决：让发布者保持存活（RViz 的 "2D Nav Goal" 天然如此），或连续发布几秒。
+  用 `rosnode info /waypoint_generator` 确认连接已建立。
+
+### TF 警告 `TF_DENORMALIZED_QUATERNION ... (nan nan nan nan)`
+- 原因：VIO 丢失跟踪，正在输出 NaN 位姿——通常是因为 `pseudo_stereo`
+  饿死了它（见 §性能指标）。
+- 解决：先查 `/camera/right/image_raw` 的频率；如果是几 Hz 而不是 ~28 Hz，
+  先去修伪双目瓶颈。
 
 ## 许可证
 
