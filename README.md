@@ -608,19 +608,31 @@ Processes a ROS bag directly to build a 2D occupancy grid, completely bypassing 
 **Arguments:** `build_map.py <bag_path> [output_prefix] [max_time] [min_time] [corr_dx] [corr_dy]`
 **Example:** `build_map.py house.bak map -1 -1 -3.2 -1.25` (full bag, drift correction)
 
-**Automatic pose-jump correction (new):** the recorded VIO trajectory contains
-single-sample discontinuities — measured on `house_full.bag`: 0.4 m in one 33 ms
-sample (12 m/s, versus a 0.26 m/s physical maximum), clustered in a burst and all in
-the `x > 1.5` region that the manual `corr_dx`/`corr_dy` patch was aimed at.
-`build_map.py` now detects any `|dp|/dt` above `v_max` (default 1.0 m/s), accumulates
-the offset, and applies it to all later poses, so the trajectory stays continuous.
-Disable with `BUILD_MAP_NO_JUMP_FIX=1` to reproduce the old behaviour.
+**Pose-jump correction — off by default, measured harmful.**
+`build_map.py` can detect single-sample discontinuities (`|dp|/dt` above `v_max`,
+default 1.0 m/s) and offset every later pose. Validated against wheel odometry, this
+makes the trajectory **worse**, not better: the backward snaps are the estimator
+correcting a stretch that had run ahead, so re-applying the offset re-injects the
+error. Enable with `BUILD_MAP_JUMP_FIX=1` only for other datasets.
 
-> **Honest status:** the correction is implemented and unit-tested, but on
-> `house_full.bag` it did **not** visibly change the resulting map (485×292 vs
-> 462×292, 16,671 vs 16,758 occupied cells). The dominant map error lies elsewhere —
-> most likely **scale inflation**: the same trajectory implies 0.5–0.7 m/s during
-> normal motion, 2–3× the robot's physical limit.
+### How accurate is the VIO, really?
+
+Validated against wheel odometry integrated from the bag's wheel joints
+(`base_link → wheel_left/right_link`; radius 0.033 m, separation 0.287 m):
+
+| Window | VIO vs wheel |
+|--------|--------------|
+| t = 252–873 s | segment scale **0.977 / 1.046 / 1.022 / 1.020 / 1.009** |
+| t = 850–955 s | local alignment scale **0.9950**, RMSE **0.020 m** |
+| t ≈ 955–975 s | error grows 0.07 m → **3.55 m**; ground truth shows the robot moving slowly (0.11 m/s, constant heading) while the VIO reports ~2× the motion |
+| t ≈ 1121–1245 s | scale 1.12 |
+
+So the VIO is near-exact for most of the run, and the map separation comes from **two
+localized episodes**, not from a global scale error. Over the whole bag the VIO covers
+90.7 m of path where the wheels turned 79.4 m.
+
+> Caveat: wheel odometry is itself an integration and drifts slowly; it is a good
+> relative reference over these windows, not an absolute ground truth.
 
 ### `postprocess_v5.py` — Map Post-Processor
 

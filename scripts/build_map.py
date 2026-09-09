@@ -4,9 +4,16 @@ import rosbag, rospy, sys, os, cv2
 import numpy as np
 from sensor_msgs.msg import CameraInfo
 
-# Set BUILD_MAP_NO_JUMP_FIX=1 to disable automatic pose-jump correction
-# (useful for reproducing the old behaviour, which needed manual corr_dx/corr_dy).
-NO_JUMP_FIX = os.environ.get('BUILD_MAP_NO_JUMP_FIX', '') not in ('', '0')
+# Automatic pose-jump correction is OFF by default: measurement against wheel
+# odometry showed it makes the trajectory WORSE. The backward snaps in the VIO
+# output are the estimator correcting itself (the preceding stretch had run
+# ahead), so re-applying the offset re-injects the error.
+#   segment-wise scale vs wheel odometry, t=914-1080s:
+#     uncorrected 0.510   ->  corrected 0.417  (worse)
+#   global scale: 0.744 -> 0.674 (worse)
+# Set BUILD_MAP_JUMP_FIX=1 to enable it anyway (e.g. for a different dataset).
+JUMP_FIX = os.environ.get('BUILD_MAP_JUMP_FIX', '') not in ('', '0')
+NO_JUMP_FIX = not JUMP_FIX
 
 def correct_pose_jumps(times, poses, v_max=1.0, verbose=True):
     """Remove single-sample discontinuities from a VIO trajectory.
@@ -19,6 +26,11 @@ def correct_pose_jumps(times, poses, v_max=1.0, verbose=True):
     Whenever |dp|/dt exceeds v_max the trajectory is treated as discontinuous:
     the offset is accumulated and applied to every later pose, so the trajectory
     stays continuous. Returns (corrected_poses, n_jumps).
+
+    NOTE: disabled by default. Validated against wheel odometry on
+    house_full.bag, this heuristic makes the trajectory worse -- the snaps are
+    the estimator correcting a stretch that had run ahead, so offsetting the
+    later poses re-injects the error. See the module-level JUMP_FIX comment.
     """
     out = []
     n_jumps = 0
