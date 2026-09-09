@@ -550,9 +550,30 @@ Generates a virtual right camera image from RGB + depth using the stereo dispari
 
 **Input topics:** `/camera/rgb/image_raw`, `/camera/depth/image_raw`, `/camera/rgb/camera_info`
 **Output topics:** `/camera/right/image_raw`, `/camera/right/camera_info`
-**Algorithm:** For each depth pixel with value Z, compute disparity d = fx * baseline / Z. The right-image pixel at column (u - d) gets the left-image pixel value from column u. Z-buffer via numpy's `unique` ensures occluded surfaces are hidden. Navier-Stokes inpainting fills disocclusion holes.
+**Algorithm:** For each depth pixel with value Z, compute disparity d = fx * baseline / Z. The right-image pixel at column (u − d) takes the left-image value from column u. A per-row Z-buffer resolves occlusions, implemented with `np.lexsort((-disp, u_dst))` plus a boolean group-start diff (pixel-identical to the earlier `np.unique` approach but ~25% faster). Remaining disocclusion holes are filled according to `~fill_mode`.
 **Baseline:** 0.08m (matching Intel RealSense D435).
-**Performance:** <10ms per 640×480 frame.
+
+**Hole filling (`~fill_mode`)** — the right image is ~40% holes at typical indoor
+depth, and the original full-resolution Navier-Stokes inpainting cost ~170 ms/frame,
+capping the node at ~5 Hz and starving VIO. Measured per 640×480 frame:
+
+| `fill_mode` | Cost | Rate | Notes |
+|-------------|------|------|-------|
+| `morph` (default) | 40.2 ms | 24.9 Hz | morphological close, dilates real pixels into holes |
+| `none` | 32.8 ms | 30.5 Hz | holes stay black; safest for stereo matching |
+| `inpaint_ds` | 49.3 ms | 20.3 Hz | TELEA at 1/4 scale, upsampled into the holes |
+| `inpaint_ns` | 201.5 ms | 5.0 Hz | original behavior, kept for comparison |
+
+With the default, `/camera/right/image_raw` went from 4.4 Hz to ~16 Hz (input-limited).
+Measured on a 900 s bag replay:
+
+| Configuration | Result |
+|---------------|--------|
+| VIO only (pseudo-stereo + OpenVINS) | **0 NaN over the full 900 s**; previously NaN at ~450 s |
+| Full stack (+ RTAB-Map + EGO-Planner) | NaN appears again after ~500 s (pseudo-stereo drops to ~13 Hz under the extra load) |
+
+So the throughput fix removes the bottleneck when VIO runs alone, but the full stack
+still needs headroom before mapping stays clean — see §Troubleshooting.
 
 ### `dyn_odom_tf.py` — Dynamic TF Bridge
 

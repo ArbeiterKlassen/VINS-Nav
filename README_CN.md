@@ -545,9 +545,29 @@ VIO 本身也需要静止几秒完成 ZUPT 初始化后才会发布数据。
 
 **输入话题:** `/camera/rgb/image_raw`, `/camera/depth/image_raw`, `/camera/rgb/camera_info`
 **输出话题:** `/camera/right/image_raw`, `/camera/right/camera_info`
-**算法:** 对每个有效深度像素 Z，计算视差 d = fx * 基线 / Z。右图像素列 (u - d) 的像素值取自左图像素列 u。Z-buffer 通过 numpy 的 `unique` 实现遮挡剔除。Navier-Stokes inpainting 填补去遮挡空洞。
+**算法:** 对每个有效深度像素 Z，计算视差 d = fx * 基线 / Z。右图像素列 (u − d) 的像素值取自左图像素列 u。逐行 Z-buffer 用 `np.lexsort((-disp, u_dst))` + 布尔分组起始 diff 实现（与早先的 `np.unique` 方案**逐像素相同**，但快约 25%）。剩余去遮挡空洞按 `~fill_mode` 填充。
 **基线:** 0.08m（对标 Intel RealSense D435）。
-**性能:** 640×480 每帧 <10ms。
+
+**空洞填充（`~fill_mode`）** —— 室内深度下右目约 40% 是空洞，原先的全分辨率
+Navier-Stokes inpainting 每帧约 170 ms，把节点压到 ~5 Hz，饿死了 VIO。每帧 640×480 实测：
+
+| `fill_mode` | 耗时 | 频率 | 说明 |
+|-------------|------|------|------|
+| `morph`（默认） | 40.2 ms | 24.9 Hz | 形态学闭运算，把真实像素膨胀进空洞 |
+| `none` | 32.8 ms | 30.5 Hz | 空洞保持黑色，对立体匹配最"诚实" |
+| `inpaint_ds` | 49.3 ms | 20.3 Hz | 1/4 分辨率 TELEA inpaint 后上采样到空洞 |
+| `inpaint_ns` | 201.5 ms | 5.0 Hz | 原始行为，保留以便对照 |
+
+用默认值后，`/camera/right/image_raw` 从 4.4 Hz 提升到约 16 Hz（受输入速率限制）。
+900 秒 bag 回放实测：
+
+| 配置 | 结果 |
+|------|------|
+| 仅 VIO（伪双目 + OpenVINS） | 整段 900 秒 **NaN 为 0**；此前约 450 秒就发散 |
+| 全栈（+ RTAB-Map + EGO-Planner） | 约 500 秒后仍出现 NaN（额外负载下伪双目降到约 13 Hz） |
+
+也就是说：吞吐优化在只跑 VIO 时已消除瓶颈，但全栈还需要更多余量才能让建图保持干净——
+详见 §故障排除。
 
 ### `dyn_odom_tf.py` — 动态 TF 桥接
 
