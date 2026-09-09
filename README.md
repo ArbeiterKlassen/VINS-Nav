@@ -771,9 +771,23 @@ differ):
 | params above | 236×215 | 4,577 | 22,855 |
 
 The stock map is dense with radial streaks and speckle; the new one has clean walls and
-properly carved free space. The circular boundary is simply the 4.5 m ray range. The
-trade-off to watch: aggressive ray tracing can erase thin/low obstacles — raise
-`Grid/RangeMax` or lower `Grid/RayTracing`'s reach if furniture starts disappearing.
+properly carved free space. The circular boundary is simply the 4.5 m ray range.
+
+> **But structure matters more than cleanliness.** Compared against a hand-annotated
+> floor plan (`maps/ground_truth_annotated.png`, rendered side by side in
+> `docs/map_quality_comparison.png`):
+>
+> | version | house structure |
+> |---------|-----------------|
+> | hand-annotated truth | complete: outer walls, partitions, furniture, doorway |
+> | **offline `build_map.py`** | **closest to truth** — rooms and furniture clearly readable |
+> | RTAB-Map stock params | an unreadable black mass |
+> | RTAB-Map new params | streaks gone, **but walls are fragmented and the structure is incomplete** |
+>
+> Ray tracing removed the streaks but also erodes thin walls and low furniture. For a
+> usable map, the current recommendation is **offline `build_map.py` for the map,
+> RTAB-Map only for live localisation (`map→odom`)**. Live mapping still needs finer
+> tuning or a different front end to match the offline result.
 
 ### Gazebo Model Parameters
 
