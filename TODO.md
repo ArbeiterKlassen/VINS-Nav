@@ -1,0 +1,68 @@
+# TODO
+
+Current priorities, in order. Context for each is in the linked docs.
+
+## 1. Make `live_mapper` height classification robust to VIO Z drift
+
+**Problem.** `live_mapper.py` splits points into wall/floor by absolute height
+(`wall_zmin=0.15`, `floor_zmax=0.15`). The VIO's estimated height drifts — measured
+~0.25 m over a 100 s circle drive in Gazebo — which lifts the floor out of the band.
+The result was `wall pts 7989/7989 (100%)` and a map with no free space at all.
+
+**Direction.** Anchor the ground reference to the robot rather than to the world
+origin, e.g. subtract the robot's current estimated Z (smoothed) before classifying,
+with a slow-tracking reference so genuine floor slope is still handled. Same idea
+applies to `build_map.py` for offline runs on long bags.
+
+**Verify.** Does not need Gazebo — a bag replay is enough. Re-run the 400 s window and
+check that the wall fraction stays in the 40–60% range seen on good runs rather than
+saturating at 100%.
+
+## 2. Solve the drive problem for live Gazebo testing
+
+**Problem.** Two separate blockers:
+- Open-loop drive patterns get stuck against walls. Once the robot stops, OpenVINS
+  stops publishing odometry entirely (ZUPT returns early before `timelastupdate` is
+  set — see `docs/openvins_local_patches.md`), so the map stops growing.
+- The reactive explorers (`bounce_explore.py`, `laser_circle.py`, …) need `/scan`,
+  which stops publishing after a few minutes on this VM.
+
+**Direction.** Either fix the laser, or write an exploration node that needs no
+sensors beyond what already works — e.g. drive a sequence of VIO-relative waypoints
+(forward N metres, turn M degrees) with a timeout and a reverse-and-turn recovery,
+so the robot is never stationary for long.
+
+**Verify.** Robot keeps moving for 3+ minutes without getting stuck; `/ov_msckf/odomimu`
+publishes continuously.
+
+## 3. Re-run the full live mapping test against the ground truth
+
+**Depends on 1 and 2.**
+
+Run a full Gazebo session, save the map, and compare it against
+`maps/ground_truth_annotated.png`. The bar set by the earlier work: `live_mapper`
+fed the recorded poses reached 5589 occupied / 10535 free cells and matched
+`build_map.py` almost exactly — so the algorithm is proven; this run tests whether
+the *live* pipeline reaches the same quality.
+
+---
+
+## Known issues that are not on the critical path
+
+- **Recording drops frames.** `house_full.bag` lost ~38% of camera frames with
+  intervals from 34–194 ms, which destabilises the VIO scale (CV 0.182 vs 0.029 on
+  the original live run). Reducing the recording load would make bag replay
+  representative of live conditions again.
+- **Two localized VIO failure windows** in the original recording (t≈955–975 s and
+  t≈1121–1245 s) remain unexplained; only located, not diagnosed.
+- **Full-stack CPU headroom.** `pseudo_stereo` drops to ~13 Hz with RTAB-Map and
+  EGO-Planner running; the research notes suggest `num_pts` 600→300–400 and
+  `num_opencv_threads` 4→2–3 if it matters.
+- **Closed-loop navigation** (goal → autonomous drive) has still never been run
+  end-to-end.
+
+## Hardware
+
+- **Gazebo / TurtleBot3** — the current development platform, on a VMware VM.
+- **Unitree Go1** — acquired 2026-10-10; SDK availability and hardware configuration
+  under investigation, see `docs/unitree_go1.md` once written.
