@@ -31,7 +31,7 @@ behaviour. Verified two ways:
   diagnostics now report the reference (`ground=-0.081 … -0.038`) and the wall
   fraction held at 49–63% throughout.
 
-## 2. Solve the drive problem for live Gazebo testing
+## 2. Solve the drive problem for live Gazebo testing — IN PROGRESS 2026-10-11
 
 **Problem.** Two separate blockers:
 - Open-loop drive patterns get stuck against walls. Once the robot stops, OpenVINS
@@ -47,6 +47,22 @@ so the robot is never stationary for long.
 
 **Verify.** Robot keeps moving for 3+ minutes without getting stuck; `/ov_msckf/odomimu`
 publishes continuously.
+
+**Progress.** `explore_vio.py` written: a FORWARD / TURN / RECOVER state machine driven
+by VIO odometry with a timeout fallback, so a VIO dropout degrades the pattern instead
+of stopping the robot. `tests/test_explore_vio_core.py` covers seven properties, the
+load-bearing one being **never commands a standstill** (0 of 4000 ticks) — a stationary
+robot freezes the map, not just the motion.
+
+One design flaw found and fixed during testing: driving from t=0 prevents the ZUPT
+initialisation, because the robot is never still long enough (observed 0 successful
+inits, 118 "only N valid features" failures). Added `~start_delay` (default 45 s) —
+OpenVINS needs the robot stationary to initialise and only publishes once it moves, so
+there is no observable signal to wait on, and a fixed hold is the honest answer.
+
+**Still open:** the Gazebo integration run did not complete. The camera stream stops
+after a few minutes on this VM, which now blocks both this item and item 3. That
+degradation is worth attacking on its own.
 
 ## 3. Re-run the full live mapping test against the ground truth
 

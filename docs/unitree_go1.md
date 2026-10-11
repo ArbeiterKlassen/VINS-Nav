@@ -236,7 +236,34 @@ per-joint states — so this is a real, available improvement over what a purely
 visual-inertial system can do on a legged platform. It is also the reason a Go1 VIO
 should not simply be the TurtleBot3 stack with different topics.
 
-## 7. Not yet verified — to check when the robot is in hand
+## 7. Network reachability — confirmed from the VM
+
+The Go1 is cabled to the **host machine**, not to this Ubuntu VM, so the first question
+was whether the VM can reach it at all. Measured 2026-10-10:
+
+| Target | Result |
+|--------|--------|
+| `192.168.123.10` (motion control board) | ✅ reachable |
+| `192.168.123.161` (sport-mode service) | ✅ reachable |
+| `192.168.12.1` (Raspberry Pi, wireless side) | ❌ not reachable — expected |
+
+The route is not a coincidence: `ip route get 192.168.123.10` resolves via
+`192.168.38.2` (the VMware NAT gateway, i.e. the host), and the ping shows
+**2.5 ms average, 0.4 ms jitter** — a real device answering, not a NAT artefact.
+So the host is forwarding for the VM and **no network reconfiguration is needed**.
+
+Caveats worth knowing before sending anything to the robot:
+
+- The SDK is **UDP**. NAT handles replies to the source port fine, but the robot's
+  controller accepts **one client at a time**, so if the host is also running
+  something that talks to it, the two will fight. Make sure nothing else on the host
+  is connected.
+- Nothing has been sent to the robot yet. Reachability was checked with `ping` only;
+  a quadruped that moves unexpectedly is a safety matter, so the first actual command
+  should be a **stand / damping** mode with the robot on the ground and clear of
+  obstacles, and idle (`HighCmd.mode = 0`) to stop.
+
+## 8. Not yet verified — to check when the robot is in hand
 
 - Which variant: Air / Pro / **Edu**. The onboard computers and the cameras only exist
   on Edu (and the Jetson mix differs on "Max").
@@ -248,3 +275,62 @@ should not simply be the TurtleBot3 stack with different topics.
   calibrated for the simulated sensor, so the Allan-variance step would need redoing.
 - Whether `192.168.123.x` is reachable over the wired port or only via the Pi's
   wireless bridge (the Japanese write-ups use SSH to `192.168.12.1` plus IP forwarding).
+
+## 8. Field notes — 2026-10-11 (robot on the bench)
+
+All facts below verified on the live unit.
+
+### 8.1 "Boot failure" was a missing battery box
+
+- Symptom: after powering on the battery (short press, then long press ≥ 2 s) the LED ran the
+  normal sequence (sweep + level display) and went dark after ~2-3 s. No sound, no motion, no
+  head LED; the robot never stood up.
+- Root cause: the battery box (the carrier that seats the pack into the robot) had been taken
+  out and lost. The pack was never actually mated with the robot bus, so the battery saw no
+  load and shut itself down. The manual documents this: load-detection protection powers the
+  battery off ~3 s after power-on when no load is connected.
+- Fix: seat the pack in a proper battery box and insert it. Everything works.
+- Rules of thumb: battery LED dark ~3 s after power-on + total silence = no load = a power-path
+  problem (seating / box / contacts), never a software problem — a bricked computer still draws
+  current. A battery turned on outside the robot also powers off in ~3 s by design.
+
+### 8.2 Wired access from the host PC
+
+- Cable: host gigabit NIC → robot gigabit Ethernet port (user manual appendix, port 7).
+- Host NIC: static `192.168.123.100/24`, no gateway (Windows:
+  `netsh interface ipv4 set address "以太网" static 192.168.123.100 255.255.255.0`; revert with
+  `netsh interface ipv4 set address "以太网" dhcp`).
+- Live endpoints (ping / ARP verified):
+
+  | Endpoint | Address | Notes |
+  |---|---|---|
+  | Motion control board | `192.168.123.10` | ping ok |
+  | Sport-mode service | `192.168.123.161` | ping ok; UDP 8082 |
+  | Head Nano | `192.168.123.13` | ssh ok — `unitree` / `123` (factory default) |
+  | Body Nano | `192.168.123.14` | ssh ok — `unitree` / `123` |
+  | Main computer | `192.168.123.15` | Xavier NX, hostname `nx` — ssh ok — `unitree` / `123` |
+
+- This answers the open question in section 7: `192.168.123.x` is directly reachable over the
+  wired port.
+- Passwordless ssh from the host PC was set up on this date (host key added to each machine's
+  `authorized_keys`).
+- Alternate path: the robot's WiFi hotspot `UnitreeRoboticsGo1-XXX` (password `00000000`)
+  reaches the wireless-side Pi at `192.168.12.1`.
+
+### 8.3 Onboard survey
+
+| Machine | Board | Hostname | Root disk | `/dev/video*` | Autostart camera nodes |
+|---|---|---|---|---|---|
+| `.13` | Jetson Nano 4GB | `unitree-desktop` | 14G, 81% used | 2 (front + chin) | `example_point` + `point_cloud_node` running |
+| `.14` | Jetson Nano 4GB | `unitree-desktop` | 14G, 57% used | 2 (left + right) | `point_cloud_node` x2 running |
+| `.15` | Jetson Xavier NX | `nx` | 110G NVMe, 20% used | 1 (belly) | `point_cloud_node` running |
+
+- All three: Ubuntu 18.04.5, kernel `4.9.201-tegra`, boot with the robot.
+- `~/Unitree/autostart` is intact and starts at login: updateDependencies, ipconfig,
+  gencamparams, camerarosnode, 03persontrack, imageai, faceLightServer, slamDetector, wsaudio,
+  faceLightMqtt. The camera nodes hold `/dev/video*` — kill them before using
+  `UnitreeCameraSDK` directly (see section 6).
+- SDK trees present: `~/Unitree/sdk/{UnitreeCameraSdk,faceLightSDK_Nano,ultraSoundSDK_Nano}`.
+- No RTC on these boards: clocks jump back to the image build date (2018-01-29 on `.13`).
+  Do not trust file mtimes.
+- `.13` root disk is 81% full (2.6G free) — be careful before recording or building there.
