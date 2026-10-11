@@ -157,7 +157,86 @@ Also worth noting: the Go1 is a **legged** platform. EGO-Planner's trajectories 
 differential-drive base — that layer would need a velocity-command adapter for
 `HighCmd.velocity + yawSpeed` instead of `/cmd_vel`.
 
-## 6. Not yet verified — to check when the robot is in hand
+## 6. Stereo adaptation — what existing projects do
+
+Researched 2026-10-10, looking for a proven configuration to copy rather than invent.
+
+### 6.1 The camera-model mismatch
+
+Verified against the local OpenVINS source: `ov_core/src/cam/` contains exactly **two**
+models, `CamRadtan` and `CamEqui`, and the current config uses
+`distortion_model: radtan`.
+
+The Go1's factory calibration is a third thing. `UnitreecameraSDK`'s
+`example_getCalibParamsFile` writes `output_camCalibParams.yaml` containing per-eye
+**Xi**, IntrinsicMatrix and DistortionCoefficients plus a stereo rotation and baseline —
+that is the **Mei unified camera model**, whose `xi` parameter has no counterpart in
+either OpenVINS model. So the factory numbers cannot be dropped straight into the
+estimator.
+
+Two ways out:
+
+- **Rectify to pinhole and use `radtan`.** `UnitreecameraSDK` already supports a
+  `PERSPECTIVE` projection alongside the native `FISHEYE/LONGLAT` one, so rectified
+  pinhole frames are available with distortion set to zero. This is the lower-effort
+  path and is exactly what the reference project below does.
+- **Re-calibrate with Kalibr** using `pinhole-equi`, which OpenVINS's `CamEqui`
+  explicitly matches. More work (AprilGrid target, 2–5 Hz bags, both cameras plus
+  IMU), but it gives a proper `cam0`/`cam1`/IMU chain rather than a rectified proxy.
+
+### 6.2 The reference project — and the surprise in it
+
+[Cerberus](https://github.com/ShuoYangRobotics/Cerberus) (Shuo Yang et al., RA-L 2022 +
+ICRA 2023) is the closest existing work: **visual-inertial-leg odometry for the Unitree
+A1 and Go1**, built on VINS-Fusion with an added contact-preintegration term, reporting
+**<1 % position drift**. It ships Go1 configs, launch files and demo bags, and is the
+best thing to read before writing any Go1 VIO code.
+
+But its Go1 configuration does **not** use the onboard fisheye. `hardware_go1_vilo_config.yaml`
+points at:
+
+```yaml
+imu_topic:    "/hardware_go1/imu"
+image0_topic: "/camera_forward/infra1/image_rect_raw"
+image1_topic: "/camera_forward/infra2/image_rect_raw"
+leg_topic:    "/hardware_go1/joint_foot"
+robot_type:   "go1"
+```
+
+and the camera yaml is `model_type: PINHOLE`, `424×240`, all distortion coefficients
+zero, `fx = fy = 211.879`, `cx = 212.05`, `cy = 120.70`. Those are **RealSense D435
+infra-stream numbers** (`infra1`/`infra2`, `_optical_frame`), i.e. an **external
+forward-facing D435** bolted on, with the images already rectified. The proven
+low-drift Go1 configuration therefore sidesteps the fisheye problem entirely.
+
+### 6.3 What this means for the choice
+
+| Path | Proven? | Effort | Notes |
+|------|---------|--------|-------|
+| Add a forward RealSense D435 | ✅ Cerberus, <1 % drift | Low | It also gives **depth**, so the existing pseudo-stereo front end transfers as-is — only recalibration is needed |
+| Onboard fisheye, rectified to pinhole | ⚠️ no reference config found | Medium | Needs per-Jetson camera access, OpenCV 4.1.1 pin, and a rectification step |
+| Onboard fisheye, Kalibr `pinhole-equi` | ⚠️ no reference config found | High | Cleanest model fit for `CamEqui`, but full recalibration |
+
+**Recommendation:** if a D435 is available, take it. It is the only option with a
+published working configuration on this exact robot, and — because it restores the
+RGB-D input that pseudo-stereo was designed around — the VINS-Nav front end needs no
+structural change at all. Chasing the onboard fisheye is interesting but would be new
+work with no reference to copy.
+
+### 6.4 The part that is genuinely new for a legged robot
+
+Cerberus's actual contribution is worth understanding even if the camera question is
+settled: when a foot is on the ground, the leg kinematics give a direct **body velocity**
+measurement, and folding that in as a *contact preintegration* factor is what takes drift
+below 1 %. `contact_sensor_type: 2` in their config means the foot-force sensors are used
+to decide contact.
+
+The Go1 exposes exactly what this needs — `LowState.footForce` / `footForceEst` and the
+per-joint states — so this is a real, available improvement over what a purely
+visual-inertial system can do on a legged platform. It is also the reason a Go1 VIO
+should not simply be the TurtleBot3 stack with different topics.
+
+## 7. Not yet verified — to check when the robot is in hand
 
 - Which variant: Air / Pro / **Edu**. The onboard computers and the cameras only exist
   on Edu (and the Jetson mix differs on "Max").
