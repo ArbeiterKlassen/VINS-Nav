@@ -37,7 +37,7 @@
 # ============================================================================
 set -uo pipefail
 
-MATCHERS="${GO1_CAM_MATCH:-point_cloud_node camerarosnode live_human_pose mqttControlNode}"
+MATCHERS="${GO1_CAM_MATCH:-point_cloud_node example_point live_human_pose mqttControlNode}"
 DEFAULT_FILE="${HOME}/go1_cam_backup.json"
 LOGDIR="${GO1_CAM_LOGDIR:-${HOME}/go1_cam_logs}"
 
@@ -96,7 +96,14 @@ cmd_status() {
 
 cmd_record() {
     local file="${1:-$DEFAULT_FILE}"
-    [ -e "$file" ] && die "$file exists -- move it aside rather than overwriting a previous record"
+    # "-" streams the record to stdout instead of writing it on the robot. The
+    # Jetsons have small, nearly-full root disks, so prefer:
+    #   ssh unitree@<ip> 'bash -s record -' < camera_nodes.sh > cam_<ip>.json
+    if [ "$file" != "-" ]; then
+        [ -e "$file" ] && die "$file exists -- move it aside rather than overwriting a previous record"
+    fi
+    local dest="$file"
+    [ "$dest" = "-" ] && dest="/dev/stdout"
 
     local n=0
     {
@@ -130,10 +137,14 @@ cmd_record() {
         done
         printf '\n  ]\n'
         printf '}\n'
-    } > "$file"
+    } > "${dest}"
 
-    echo "recorded $n process(es) to $file"
-    [ "$n" -eq 0 ] && echo "warning: nothing matched -- the file records an empty set"
+    if [ "$file" = "-" ]; then
+        echo "recorded $n process(es) to stdout" >&2
+    else
+        echo "recorded $n process(es) to $file"
+    fi
+    [ "$n" -eq 0 ] && echo "warning: nothing matched" >&2
     return 0
 }
 
@@ -194,7 +205,30 @@ PY
 
 cmd_restore() {
     local file="${1:-$DEFAULT_FILE}"
-    [ -r "$file" ] || die "$file not readable -- run 'record' first"
+
+    # Preferred path: the robot's own autostart entry point. Running it
+    # re-derives the camera time offset from ntpdate and handles the per-board
+    # camera numbering from the `patch` file, so it is strictly better than
+    # replaying the argv we happened to capture. Fall back to replay if it is
+    # not there.
+    local entry="${GO1_CAM_ENTRY:-$HOME/Unitree/autostart/camerarosnode/camerarosnode.sh}"
+    if [ -x "$entry" ]; then
+        echo "restoring via the autostart entry point:"
+        echo "  $entry"
+        echo "  (it sleeps ~20 s per camera while initialising -- this is slow by design)"
+        mkdir -p "$LOGDIR"
+        # camerarosnode.sh cds into its own directory, so start it from there;
+        # setsid detaches it so it survives the ssh session
+        ( cd "$(dirname "$entry")" && \
+          setsid nohup bash "$entry" >> "$LOGDIR/autostart_restore.log" 2>&1 < /dev/null & )
+        echo
+        echo "started; it takes ~20-80 s before the nodes appear."
+        echo "verify with: $0 status"
+        return 0
+    fi
+
+    echo "autostart entry not found at $entry -- replaying the recorded command lines"
+    [ -r "$file" ] || die "$file not readable and no autostart entry found"
     mkdir -p "$LOGDIR"
 
     # All of it in one python pass: the record is JSON, so parse it as JSON

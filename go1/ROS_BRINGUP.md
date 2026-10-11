@@ -6,6 +6,59 @@ the source or disassembled from the shipped library, not assumed.
 
 ---
 
+## 0a. UPDATE 2026-10-11 — the robot runs its own ROS master, so step 1 does not need `ros_udp` at all
+
+Discovered while ssh'd in. **`192.168.123.161:11311` is a live ROS master** with the robot's
+own nodes registered. Verified from the VM: no local roscore, no local 11311 listener — the
+whole graph is on the robot. Measured topics:
+
+| Topic | Type | Rate |
+|---|---|---|
+| `/ros2udp/odom` | `nav_msgs/Odometry` | **200 Hz** |
+| `/camera1/point_cloud_face` | `PointCloud2` | 12.9 Hz |
+| `/camera3/point_cloud_left` | `PointCloud2` | 11.4 Hz |
+| `/range_front` | `sensor_msgs/Range` | 50 Hz |
+| `/tf` | `tf2_msgs/TFMessage` | 2299 Hz |
+| `/joint_states` | `sensor_msgs/JointState` | no data at the time of measuring |
+
+Nodes: `/camera1`, `/camera3`, `/camera4`, `/camera5`, `/node_lcm`,
+`/node_obstacle_avoidance`, `/node_obstacle_traverse`, `/ros2udp_motion_mode_adv`,
+`/ukd_triple_*`.
+
+**This removes the problem in §0.** Subscribing to a master someone else runs is genuinely
+passive — no `ros_udp`, therefore no 500 Hz `mode = 0` command, therefore the robot does not
+stand up and nothing is commanded at all. §0 is retained below because it still applies if
+we ever do run `unitree_legged_real`'s own bridge.
+
+Two caveats found at the same time:
+
+- **The camera topics are point clouds, not images.** `/camera1/point_cloud_face` carries
+  **251 points** with fields `x, y, z, rgb` in frame `trunk`. These are the downsampled
+  obstacle clouds the avoidance nodes consume, not a dense depth image. There are **no image
+  topics on this master**, so the H.264/UDP path is still needed for anything VIO-shaped.
+- `frame_id` is `uodom` with child `base_link` on the odometry, and the stamp is a **current**
+  Unix time (~2026-10-11), i.e. `.161`'s clock is roughly right even though the three Jetsons'
+  are not. See `TIMESYNC.md`.
+
+### Revised step 1 — genuinely read-only
+
+```bash
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://192.168.123.161:11311
+export ROS_IP=192.168.123.101        # so the robot can reach us back
+rostopic list
+rostopic hz  /ros2udp/odom
+rostopic echo -n1 /ros2udp/odom
+rostopic hz  /range_front
+```
+
+Nothing here publishes. The robot is already running; we are only listening. Acceptance is
+the same shape as below: `/ros2udp/odom` ≈ 200 Hz sustained, sane field values, and `/tf`
+populated. **This is the test to run first**; §2's `ros_udp` path is only needed if and when
+we want the SDK's own command interface.
+
+---
+
 ## 0. Read this first — the stack is NOT passively read-only
 
 The brief was "step 1 read-only, subscribe to the state topics, send no commands".

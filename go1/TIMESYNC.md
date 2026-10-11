@@ -1,7 +1,57 @@
-# Go1 time base — design options
+# Go1 time base — design
 
-Design only; nothing here has been run against the robot. Written 2026-10-11 while
-the robot was charging.
+**2026-10-11: partially verified against the live robot.** Measurements below marked
+*measured* were taken over ssh; the rest is still design.
+
+---
+
+## 0. UPDATE — what the robot actually does today, and why it is broken
+
+Two facts change the design, both found by reading the Jetsons' own startup script
+(`~/Unitree/autostart/camerarosnode/cameraRosNode/startNode.sh`):
+
+**(a) The robots already try to sync — and it silently fails.**
+
+```bash
+sudo ntpdate -d 192.168.123.161 > offset
+timeoffset=$(cat offset | grep "filter offset:" | awk '{print $3}')
+rosrun unitree_camera point_cloud_node _run_config_file:=… camera${camNum} ${timeoffset}
+```
+
+They measure an offset against `192.168.123.161` (the robot's own main computer) and
+pass it into the camera node as an argument. *Measured* — running exactly that
+`ntpdate -q` from each Jetson:
+
+| Board | offset reported | ntpdate verdict |
+|---|---|---|
+| `.13` | `274543234.80` s | `stratum 16` — *no server suitable for synchronization found* |
+| `.14` | `152141800.35` s | same |
+| `.15` | `151723748.13` s | same |
+
+`stratum 16` is NTP's "invalid source" marker, so **ntpdate refuses to apply anything** —
+yet the script parses the offset out regardless and hands it to the camera node. Those
+8-digit numbers visible in the running command lines (`27454323`, `15214180`, `15172374`)
+are exactly that offset, truncated. So the mechanism measures correctly and then feeds a
+number of order 10⁸ seconds into a consumer that cannot possibly want it. The sync has
+never worked, and nothing reported that.
+
+**(b) `.161`'s clock is roughly right; the three Jetsons' are not.**
+
+| Host | Clock | Error |
+|---|---|---|
+| `.161` (robot main computer) | current Unix time — the odometry topic stamps 2026-10-11 | hours off at most |
+| `.13` | 2018-01-29 | ~8.7 years |
+| `.14` | 2021-12-15 | ~4.8 years |
+| `.15` | 2021-12-20 | ~4.8 years |
+
+The three Jetsons also disagree with each other by ~5 years, which matters: nothing they
+log can be correlated with anything else.
+
+**Consequence for the design:** the pipeline we care about — odometry — is stamped on
+**`.161`'s clock, which is fine**. The broken clocks are on the Jetson side, and the
+existing compensation for them is feeding garbage. That is a strong argument for
+Route A below (stamp everything on the VM at arrival) rather than trying to repair the
+Jetson clocks.
 
 ---
 
@@ -132,11 +182,13 @@ step proves disruptive.
 
 ---
 
-## 4. Recommendation
+## 4. Recommendation, revised against the measurements
 
 1. **Start with Route A.** Do not synchronise anything for the first VIO attempt.
    Both streams on the VM clock is the simplest correct thing, and it needs nothing
-   from the robot.
+   from the robot. The measurements in §0 make this stronger, not weaker: the
+   Jetson-side compensation is already feeding a 10⁸-second offset into the camera
+   node, so the Jetson's own timestamps are the *least* trustworthy thing available.
 2. **Add Route B per session**, before capture starts, purely for diagnosability —
    it lets us measure the camera pipeline latency instead of guessing.
 3. **Measure before escalating.** If the VIO's estimated `calib_cam_timeoffset` is
@@ -144,6 +196,20 @@ step proves disruptive.
    layer is at fault, and *then* pick a fix.
 4. **Do not add chrony pre-emptively.** It is the most work, touches the robot most,
    and solves a drift problem we have not yet shown we have.
+5. **Separately: tell the user their camera sync has never worked.** That is a bug in
+   the shipped robot, not in our integration, and it affects anything on that robot
+   that trusts a camera timestamp. Worth fixing at the source — point the Jetsons'
+   `ntpdate` at a real server (our VM is NTP-synced and reachable at `.101`) — but
+   that means editing `startNode.sh` on the robot, which needs explicit approval and
+   is not required for our own path.
+
+### A note on `.161`
+
+`.161` is reachable, runs ssh, a ROS master, and answers on 8080 — but returns
+`stratum 0` to an NTP query, i.e. it is not a usable time source. Its *clock* is
+approximately right, so the odometry it stamps is usable as-is; it simply cannot
+serve time to anyone else. If the Jetsons were to be fixed, the VM (verified
+NTP-synchronised, `System clock synchronized: yes`) is the available reference.
 
 ---
 
