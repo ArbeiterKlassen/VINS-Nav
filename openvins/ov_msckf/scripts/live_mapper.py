@@ -35,6 +35,7 @@ TOPICS
 """
 
 import collections
+import math
 import threading
 
 import cv2
@@ -58,10 +59,26 @@ class LiveMapper:
         # map degrades into a blob. Subsampling keeps the walls crisp.
         self.frame_stride = rospy.get_param("~frame_stride", 5)
         self._frame_count = 0
+        # Height bands, expressed relative to the ground under the robot (see
+        # `relative_height` below). Same numbers as build_map.py.
         self.wall_zmin = rospy.get_param("~wall_zmin", 0.15)
         self.wall_zmax = rospy.get_param("~wall_zmax", 3.0)
         self.floor_zmin = rospy.get_param("~floor_zmin", -0.5)
         self.floor_zmax = rospy.get_param("~floor_zmax", 0.15)
+
+        # Ground reference. Classifying by ABSOLUTE global Z breaks as soon as the
+        # VIO's height estimate drifts: measured 2026-09-09, ~0.25 m over a 100 s
+        # drive lifted the floor out of its band and pushed 100% of points into
+        # "wall", leaving the map with no free space at all. Anchoring the bands to
+        # the ground under the robot makes the split immune to that drift.
+        # Set ~relative_height:=false to get the old absolute-Z behaviour.
+        self.relative_height = rospy.get_param("~relative_height", True)
+        self.imu_height = rospy.get_param("~imu_height", 0.078)   # IMU above floor
+        # EMA time constant for the ground estimate; long enough to ignore
+        # per-frame noise, short enough to follow the drift (which is ~2.5 mm/s).
+        self.ground_tau = rospy.get_param("~ground_tau", 2.0)
+        self.ground_z = None
+        self._ground_t = None
         self.range_max = rospy.get_param("~range_max", 6.0)
         # occupancy rule: a cell is a wall if wall hits dominate floor hits
         self.wall_ratio = rospy.get_param("~wall_ratio", 5.0)
@@ -146,6 +163,35 @@ class LiveMapper:
         return best
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    def classify(self, zw, robot_z, stamp):
+        """Split global-frame point heights into wall / floor masks.
+
+        With `relative_height` (the default) the bands are measured from the
+        ground beneath the robot instead of from the world origin, so a drifting
+        VIO height estimate cannot push the floor out of its band. `ground_z` is
+        the estimated global height of the floor, smoothed over `ground_tau`.
+
+        Returns (wall_mask, floor_mask) as boolean arrays over `zw`.
+        """
+        if self.relative_height:
+            target = robot_z - self.imu_height
+            t = stamp.to_sec()
+            if self.ground_z is None or self._ground_t is None:
+                self.ground_z = target            # first frame, nothing to smooth
+            elif t > self._ground_t and self.ground_tau > 0.0:
+                alpha = 1.0 - math.exp(-(t - self._ground_t) / self.ground_tau)
+                self.ground_z += alpha * (target - self.ground_z)
+            self._ground_t = t
+            z0 = self.ground_z
+        else:
+            z0 = 0.0                              # old absolute-Z behaviour
+
+        wall = (zw > z0 + self.wall_zmin) & (zw < z0 + self.wall_zmax)
+        floor = (zw > z0 + self.floor_zmin) & (zw < z0 + self.floor_zmax)
+        return wall, floor
+
+    # ------------------------------------------------------------------
     def depth_cb(self, msg):
         if self.fx is None:
             return
@@ -192,8 +238,7 @@ class LiveMapper:
         Yw = R10 * Xi + R11 * Yi + R12 * Zi + oy
         Zw = R20 * Xi + R21 * Yi + R22 * Zi + oz
 
-        wall = (Zw > self.wall_zmin) & (Zw < self.wall_zmax)
-        floor = (Zw > self.floor_zmin) & (Zw < self.floor_zmax)
+        wall, floor = self.classify(Zw, oz, msg.header.stamp)
 
         with self.lock:
             for mask, grid in ((wall, self.gw), (floor, self.gf)):
@@ -210,10 +255,11 @@ class LiveMapper:
                 occ = int(((self.gw > 0) & (self.gw * self.wall_ratio > self.gf)).sum())
                 fre = int(((self.gf > self.free_min_floor) & (self.gw == 0)).sum())
             rospy.loginfo("live_mapper: %d frames, wall pts %d/%d (%.0f%%), "
-                          "Z[%.2f..%.2f] p50=%.2f, cells occ=%d free=%d",
+                          "Z[%.2f..%.2f] p50=%.2f, ground=%s, cells occ=%d free=%d",
                           self.frames, int(wall.sum()), int(wall.size),
                           100.0 * wall.sum() / max(1, wall.size),
                           float(Zw.min()), float(Zw.max()), float(np.median(Zw)),
+                          ("%.3f" % self.ground_z) if self.ground_z is not None else "abs",
                           occ, fre)
 
     # ------------------------------------------------------------------

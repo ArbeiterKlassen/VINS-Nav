@@ -682,6 +682,12 @@ RTAB-Map 依赖此变换跟踪机器人运动——静态 TF 会锁定机器人�
 **输入:** `/camera/depth/image_raw`, `/camera/rgb/camera_info`, 位姿源
 **输出:** `/map`（锁存）+ `/service /static_map`
 
+**高度分层锚定在机器人脚下的地面**，而不是世界原点（`~relative_height`，默认开启；
+`~imu_height` 0.078m，`~ground_tau` 2 秒）。VIO 的高度估计会漂移——实测 100 秒驾驶
+漂了约 0.25m——用绝对 Z 分层时地面会被抬出所属区间，导致**100% 的点被判为「墙」**，
+地图完全没有自由空间。锚定后这个划分不再受漂移影响。设 `~relative_height:=false`
+回到旧行为；`tests/test_live_mapper_classify.py` 覆盖了两种模式，包含对该故障的复现。
+
 位姿源用 `~pose_source` 选择：
 
 | 值 | 含义 |

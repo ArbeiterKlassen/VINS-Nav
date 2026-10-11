@@ -696,6 +696,14 @@ same hit accumulation, same frame/pixel subsampling — but fed by the live odom
 **Input:** `/camera/depth/image_raw`, `/camera/rgb/camera_info`, pose source
 **Output:** `/map` (latched) + `/static_map` service
 
+**Height bands are anchored to the ground under the robot**, not to the world origin
+(`~relative_height`, default true; `~imu_height` 0.078 m, `~ground_tau` 2 s). The VIO's
+height estimate drifts — measured ~0.25 m over a 100 s drive — and with absolute-Z bands
+that lifts the floor out of its band and pushes **100% of points into "wall"**, leaving
+no free space at all. Anchoring makes the split immune. Set `~relative_height:=false` for
+the old behaviour; `tests/test_live_mapper_classify.py` covers both, including a
+reproduction of the failure.
+
 Pose source is selectable with `~pose_source`:
 
 | value | meaning |
