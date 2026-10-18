@@ -16,11 +16,12 @@
 #   ./record_stereo_imu.sh --out /tmp/go1_rec.bag [--seconds 90] [--no-remote]
 #   不给 --seconds 时按 Ctrl-C 结束。
 set -u
-OUT=""; SECS=0; REMOTE=1
+OUT=""; SECS=0; REMOTE=1; SAVEDIR=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out) OUT="$2"; shift 2;;
     --seconds) SECS="$2"; shift 2;;
+    --save-dir) SAVEDIR="$2"; shift 2;;
     --no-remote) REMOTE=0; shift;;
     *) echo "unknown arg: $1"; exit 1;;
   esac
@@ -44,10 +45,12 @@ fi
 
 PIDS=()
 cleanup() {
-  for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
+  for p in "${PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
+  sleep 1
+  for p in "${PIDS[@]:-}"; do kill -KILL "$p" 2>/dev/null || true; done
   if [ "$REMOTE" = 1 ]; then
     ssh -o BatchMode=yes -o ConnectTimeout=3 unitree@192.168.123.13 \
-      'kill $(cat /dev/shm/ucsdk_run/sender.pid) 2>/dev/null; true' 2>/dev/null || true
+      'kill $(cat /dev/shm/ucsdk_run/sender.pid) 2>/dev/null; pkill -f "stereo_tcp_sende[r]" 2>/dev/null; true' 2>/dev/null || true
   fi
   if [ -n "$ROSCORE_PID" ]; then
     kill "$ROSCORE_PID" 2>/dev/null || true
@@ -56,6 +59,13 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# 预清理：避免旧的接收端占着 9101 / 旧的发送端重复推流
+pkill -f "go1_stereo_recei[v]er.py" 2>/dev/null || true
+if [ "$REMOTE" = 1 ]; then
+  ssh -o BatchMode=yes -o ConnectTimeout=3 unitree@192.168.123.13 \
+    'kill $(cat /dev/shm/ucsdk_run/sender.pid) 2>/dev/null; pkill -f "stereo_tcp_sende[r]" 2>/dev/null; true' 2>/dev/null || true
+fi
 
 if [ "$REMOTE" = 1 ]; then
   echo "[rec] starting stereo sender on .13 (TCP 9101)"
@@ -66,7 +76,9 @@ if [ "$REMOTE" = 1 ]; then
 fi
 
 echo "[rec] starting stereo receiver (ROS)"
-python3 go1_stereo_receiver.py --ros > /tmp/stereo_receiver.log 2>&1 &
+RECV_ARGS=()
+if [ -n "$SAVEDIR" ]; then RECV_ARGS=(--save-dir "$SAVEDIR" --save-every 5); fi
+python3 go1_stereo_receiver.py --ros "${RECV_ARGS[@]}" > /tmp/stereo_receiver.log 2>&1 &
 PIDS+=($!)
 sleep 2
 echo "[rec] starting IMU publisher (8007, 500Hz)"
@@ -75,7 +87,7 @@ PIDS+=($!)
 sleep 3
 
 ready=0
-for i in $(seq 1 15); do
+for i in $(seq 1 25); do
   if rostopic list 2>/dev/null | grep -q "^/go1/imu$" && rostopic list 2>/dev/null | grep -q "^/go1/cam1/image_raw$"; then
     ready=1; break
   fi

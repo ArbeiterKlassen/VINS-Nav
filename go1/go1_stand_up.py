@@ -72,12 +72,17 @@ def parse_state(d: bytes) -> dict:
 
 def run_phase(sock, cmd_frame: bytes, seconds: float, rate: float, label: str,
               state: dict | None) -> tuple[dict | None, int, int]:
-    """按 rate 发送 cmd_frame，持续 seconds 秒；返回 (最新状态, 发送数, 收到数)。"""
+    """按 rate 发送 cmd_frame，持续 seconds 秒；返回 (最新状态, 发送数, 收到数)。
+
+    Fail-fast：开始发送 1 秒内没有收到任何**有效** HighState，或连续 1 秒没有新的
+    有效 HighState，立即停止发送（避免在运动服务异常时继续盲发指令）。
+    """
     sent = recv = 0
     period = 1.0 / rate
     t0 = time.time()
     next_t = t0
     t_report = t0
+    last_rx = None
     while time.time() - t0 < seconds:
         now = time.time()
         while next_t <= now:
@@ -97,6 +102,7 @@ def run_phase(sock, cmd_frame: bytes, seconds: float, rate: float, label: str,
                 recv += 1
                 try:
                     state = parse_state(d)
+                    last_rx = time.time()
                 except ValueError:
                     pass
             except BlockingIOError:
@@ -104,6 +110,13 @@ def run_phase(sock, cmd_frame: bytes, seconds: float, rate: float, label: str,
             except OSError:
                 break
         now = time.time()
+        # fail-fast: 无有效回包时立即停发
+        if sent > 50:
+            if (last_rx is None and now - t0 > 1.0) or \
+               (last_rx is not None and now - last_rx > 1.0):
+                print(f"  [{label}] ABORT: 连续 >1s 未收到有效 HighState — 停止发送（防盲发）")
+                sys.stdout.flush()
+                break
         if now - t_report >= 0.5:
             t_report = now
             if state:

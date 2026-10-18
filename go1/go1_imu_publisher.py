@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import socket
 import sys
 import time
@@ -28,7 +29,7 @@ import time
 import rospy
 from sensor_msgs.msg import Imu
 
-from lowstate_rx import DST, POLL, parse_lowstate
+from lowstate_rx import POLL, parse_lowstate
 
 
 def main() -> int:
@@ -36,7 +37,11 @@ def main() -> int:
     ap.add_argument("--hz", type=float, default=500.0)
     ap.add_argument("--csv", default="", help="同时写 CSV（make_stereo_bag.py 可直接用）")
     ap.add_argument("--topic", default="/go1/imu")
+    ap.add_argument("--dst", default=os.environ.get("GO1_IMU_DST", "192.168.123.10:8007"),
+                    help="8007 目标 host:port（默认 .10:8007；测试可用本机假服务器）")
     args = ap.parse_args()
+    host, _, port = args.dst.partition(":")
+    dst = (host, int(port))
 
     rospy.init_node("go1_imu_publisher", anonymous=False)
     pub = rospy.Publisher(args.topic, Imu, queue_size=200)
@@ -59,15 +64,16 @@ def main() -> int:
     t_report = t0
     sent = recv = 0
     last_acc = (0.0, 0.0, 0.0)
+    last_tick = None   # 按 tick 去重（实测 .10 会对同一请求回两个包）
 
-    print(f"[imu] polling {DST[0]}:{DST[1]} at {args.hz:g} Hz -> {args.topic}")
+    print(f"[imu] polling {dst[0]}:{dst[1]} at {args.hz:g} Hz -> {args.topic}")
     sys.stdout.flush()
     try:
         while not rospy.is_shutdown():
             now = time.time()
             while next_send <= now:
                 try:
-                    sock.sendto(POLL, DST)
+                    sock.sendto(POLL, dst)
                     sent += 1
                 except OSError:
                     pass
@@ -78,16 +84,21 @@ def main() -> int:
 
             for _ in range(64):
                 try:
-                    d, _ = sock.recvfrom(4096)
+                    d, addr = sock.recvfrom(4096)
                 except BlockingIOError:
                     break
                 except OSError:
                     break
                 recv += 1
+                if addr[0] != dst[0]:
+                    continue          # 只接受目标主机的回包
                 try:
                     fr = parse_lowstate(d)
                 except ValueError:
                     continue
+                if fr["tick"] == last_tick:
+                    continue          # 去重（服务会对同一请求回重复包）
+                last_tick = fr["tick"]
                 imu = fr["imu"]
                 q = imu["quaternion"]
                 g = imu["gyroscope"]

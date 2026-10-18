@@ -146,7 +146,9 @@ rosnode list; rostopic list
 | `make_stereo_bag.py` | PNG 对 [+IMU CSV] → rosbag（离线 SLAM 输入） |
 | `run_slam_offline.sh` | 离线 SLAM（RTAB-Map stereo / `--ov-config` OpenVINS） |
 | `stereo_depth_demo.py` | 双目测距演示（SGBM 视差 → 深度图） |
-| `go1_stand_up.py` | 站立脚本（HighCmd mode 6/8；`--confirm` 才发送） |
+| `go1_stand_up.py` | 站立脚本（mode 6/8；`--confirm` 才发送；无回包 >1s 自动停发） |
+| `go1_lie_down.py` | 卧倒脚本（mode 5 / 7） |
+| `go1_stand_lie_cycle.py` | 站立↔卧倒循环测试（实测 3 循环全 PASS） |
 
 ## 8. 双目 / IMU / 离线 SLAM / 站立（2026-10-17 新增）
 
@@ -165,8 +167,14 @@ rosnode list; rostopic list
 - **离线 SLAM**：`make_stereo_bag.py` → `run_slam_offline.sh --bag B --out D`
   （无 IMU 走 RTAB-Map stereo；`--ov-config` 走 OpenVINS）。建图核心已用
   `house_full.bag` 的**真实运动数据**复跑验证（VIO TF + depth → 占用栅格图）。
-- **站立脚本**（运动指令）：`go1_stand_up.py`（mode 6/8，auto 6→8；CRC 已用官方
-  SDK 静态库逐字节校验）——必须 `--confirm`，按 SOP 有人看护时使用。
+- **站立 / 卧倒 / 循环**（运动指令）：`go1_stand_up.py`（mode 6/8，auto 6→8）、
+  `go1_lie_down.py`（mode 5/7）、`go1_stand_lie_cycle.py`（循环测试）。CRC 已用
+  官方 SDK 静态库逐字节校验；必须 `--confirm`，按 SOP 有人看护。**无有效回包
+  >1 秒自动停发（fail-fast）**。2026-10-18 实机验证：站立 0.278–0.285 m、
+  卧倒 0.093 m，连续 3 个循环全部 PASS。
+- **实机链路状态（2026-10-18）**：双目实时 928×800 @ ~7 fps（JPEG ~92 KB/眼），
+  IMU 500 Hz（按 tick 去重）；15 s 实机录制 = 双目各 97 帧 + IMU 7014 条；
+  离线 RTAB-Map 在该真实数据上建图节点 14 个（静止站立、无闭环链接属正常）。
 - **标定**：暂用估计内参（hFov≈90° ⇒ fx=width/2，基线≈25.09 mm）；
   `stereo_depth_demo.py` 可出视差/深度图与距离估计。后续用 OpenCV fisheye
   棋盘格（或 Kalibr）实测替换，见 `TASKS.md`。

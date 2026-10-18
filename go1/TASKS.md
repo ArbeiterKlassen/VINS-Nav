@@ -13,14 +13,21 @@
 - ✅ 双目 TCP+JPEG 桥：发送端 `stage/stereo_tcp_sender.cc`（.13 已编译通过）、
   接收端 `go1_stereo_receiver.py`（VM 就绪：可选 ROS 图像/camera_info、存 PNG）
 - ✅ 空间标定方案调研（Kalibr pinhole-equi / OpenCV fisheye / Mei / SDK 校正对比）
+- ✅ **实机（2026-10-18）：站立/卧倒/3 循环全部 PASS**（mode 6/5；站立 0.278–0.285 m，
+  卧倒 0.093 m；脚本已加 fail-fast：无有效回包 >1 s 自动停发）
+- ✅ **实机：双目 928×800 @ ~7 fps 实时抓图**（左右目视差已核）；IMU 500 Hz（tick 去重）
+- ✅ **实机：15 s 双目+IMU 录制**（97 帧/眼 + IMU 7014 条，415 MB）→ 离线
+  RTAB-Map 建图 **Node=14**（静止站立、无闭环链接属正常）
 
 ## 待办（按优先级）
 1. 🧊 **双目桥端到端实测**（上电后）：重新部署 `.13:/dev/shm`（断电已清空）→
    `bench_rect` / `bench_raw` 实测帧率（只 JPEG）→ 接收端收流验证（左右目一致性、
    时延、丢帧）→ 定工作模式（分辨率/帧率/质量）。
-2. 🧊 **录制一段双目视频**：**运动来源已定 = 遥控手柄**（狗先用手柄站起/行走；
+2. 🔄 **录制一段双目视频**：**运动来源已定 = 遥控手柄**（狗先用手柄站起/行走；
    录制期间**不得启动任何 8082 客户端**，sport 客户端语义留给手柄）。
-   工具：`go1/record_stereo_imu.sh`（双目桥 + 8007 IMU → rosbag，IMU 已获用户确认）。
+   工具：`go1/record_stereo_imu.sh`（双目桥 + 8007 IMU → rosbag，IMU 已获确认）。
+   ✅ 实机静止录制已验证（15 s / 97 帧/眼 / IMU 7014 条）；**待手柄操控狗移动时
+   录一段带运动的视频**，再出建图效果（栅格/点云）。
 3. ✅/🔄 **离线 SLAM 回放**：`go1/run_slam_offline.sh` + `go1/make_stereo_bag.py`
    （PNG 对 [+IMU CSV] → rosbag；无 IMU 走 RTAB-Map stereo，有 IMU 走 OpenVINS）。
    **冒烟已通过**（节点订阅 / 仿真时间 / 清理均正确；静态数据无运动）。

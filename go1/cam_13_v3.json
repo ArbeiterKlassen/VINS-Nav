@@ -1,0 +1,21 @@
+{
+  "recorded_at": "2018-01-29T00:00:28+08:00",
+  "hostname": "unitree-desktop",
+  "matchers": "point_cloud_node example_point live_human_pose mqttControlNode",
+  "processes": [
+    {
+      "pid": 7717,
+      "ppid": 7214,
+      "exe": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/example_point",
+      "cwd": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode",
+      "argv": ["/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/example_point", "./src/unitree_camera/config/stereo_camera_config.yaml"]
+    },
+    {
+      "pid": 7867,
+      "ppid": 7214,
+      "exe": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node",
+      "cwd": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode",
+      "argv": ["/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node", "_run_config_file:=./src/unitree_camera/config/stereo_camera_config1.yaml", "camera1", "27514312"]
+    }
+  ]
+}
