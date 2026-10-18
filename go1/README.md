@@ -138,3 +138,35 @@ rosnode list; rostopic list
 | `udp_probe.py` | 相机流验包探针 |
 | `setup_go1_env.sh` | 本 VM 的 ROS / catkin 环境 |
 | `cam1_face_calib_2026-10-11.yaml` | face 相机出厂标定（PosNumber=1，基线≈25.09 mm） |
+| `TASKS.md` | 任务清单（已完成/待办/停机原因） |
+| `stage/stereo_tcp_sender.cc` | 双目 TCP+JPEG 发送端（`.13` 编译） |
+| `go1_stereo_receiver.py` | 双目接收端（ROS 图像 + camera_info / 存 PNG） |
+| `go1_imu_publisher.py` | 8007 IMU → `/go1/imu`（500 Hz，已获准启用） |
+| `record_stereo_imu.sh` | 一键录制「双目 + IMU」rosbag（手柄操控时使用） |
+| `make_stereo_bag.py` | PNG 对 [+IMU CSV] → rosbag（离线 SLAM 输入） |
+| `run_slam_offline.sh` | 离线 SLAM（RTAB-Map stereo / `--ov-config` OpenVINS） |
+| `stereo_depth_demo.py` | 双目测距演示（SGBM 视差 → 深度图） |
+| `go1_stand_up.py` | 站立脚本（HighCmd mode 6/8；`--confirm` 才发送） |
+
+## 8. 双目 / IMU / 离线 SLAM / 站立（2026-10-17 新增）
+
+- **双目**：SDK 的 UDP H.264 推流实测**只发单目**（Transmode 1/3 无效）；双目走本地
+  API（`getStereoFrame`/`getRectStereoFrame`，左右目各 928×800、带 µs 时间戳；
+  **校正输出 180° 倒置**，VIO/建图不受方向影响），经自建 TCP+JPEG 桥回传：
+  `.13` 上 `stage/stereo_tcp_sender.cc` → VM `go1_stereo_receiver.py`。
+- **IMU**（已获同意启用）：`go1_imu_publisher.py` 以 500 Hz 轮询 `.10:8007`
+  （只发 64B 非法填充触发包，无控制副作用），发布 `/go1/imu`，可同时写 CSV。
+- **录制**（运动来源 = 遥控手柄；**录制期间不得启动任何 8082 客户端**，sport
+  单客户端语义留给手柄）：
+  ```bash
+  source /opt/ros/noetic/setup.bash
+  ./record_stereo_imu.sh --out /tmp/go1_rec.bag --seconds 90
+  ```
+- **离线 SLAM**：`make_stereo_bag.py` → `run_slam_offline.sh --bag B --out D`
+  （无 IMU 走 RTAB-Map stereo；`--ov-config` 走 OpenVINS）。建图核心已用
+  `house_full.bag` 的**真实运动数据**复跑验证（VIO TF + depth → 占用栅格图）。
+- **站立脚本**（运动指令）：`go1_stand_up.py`（mode 6/8，auto 6→8；CRC 已用官方
+  SDK 静态库逐字节校验）——必须 `--confirm`，按 SOP 有人看护时使用。
+- **标定**：暂用估计内参（hFov≈90° ⇒ fx=width/2，基线≈25.09 mm）；
+  `stereo_depth_demo.py` 可出视差/深度图与距离估计。后续用 OpenCV fisheye
+  棋盘格（或 Kalibr）实测替换，见 `TASKS.md`。
