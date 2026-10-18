@@ -43,10 +43,11 @@
 4. 🔄 **OpenVINS 适配**：生成 Go1 双目配置（cam0/cam1 内参 + `T_imu_cam` + IMU 噪声）。
    **IMU 已获用户确认启用**（8007 轮询，只发非法填充触发包）——
    `go1/go1_imu_publisher.py` 提供 `/go1/imu`；`record_stereo_imu.sh` 一并录制。
-5. 🔄 **空间标定落地**：先用 SDK 校正图 + 估计内参（hFov 90° ⇒ fx≈464@928 宽，
-   基线用出厂 Translation≈25.09 mm）冒烟；再用 OpenCV fisheye 棋盘格实测标定
-   （或 Kalibr）替换。`go1/stereo_depth_demo.py` 已能出视差/深度图与距离估计
-   （当前为估计内参，标定后可提精度）。
+5. 🔄 **空间标定落地**：**工具已就绪** —— `targets/checkerboard_9x6_20mm_A4.pdf`
+   （A4 100%）、`go1_stereo_calibrate.py`（fisheye/pinhole 双模型 + 合成数据自测
+   PASS：fx 0.02%、基线 0.23%、旋转 0.6°、RMS 0.23 px）、
+   `go1_remote_record.py --sender-mode raw`。**待狗上电 + 场景就绪后录制标定视频
+   并跑标定**，再用新参数更新接收端 camera_info 并重跑 SLAM 对比点云质量。
 6. ✅ **站立脚本**：`go1/go1_stand_up.py`（mode 6/8，auto 6→8 回退；CRC 已用官方
    amd64 静态库三组向量**逐字节校验**；含 HighState 回读 mode/bodyHeight）。
    **尚未实机执行**（等狗上电 + 用户按 SOP 确认）。

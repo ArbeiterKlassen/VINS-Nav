@@ -127,6 +127,8 @@ def main() -> int:
     ap.add_argument("--out-dir", default=os.path.expanduser("~/go1_recordings"))
     ap.add_argument("--prefix", default="go1_rec")
     ap.add_argument("--no-remote", action="store_true", help="不启动 .13 上的发送端")
+    ap.add_argument("--sender-mode", choices=["rect", "raw"], default="rect",
+                    help="双目发送模式：rect=SDK 校正图（默认）；raw=原始鱼眼（标定用）")
     args = ap.parse_args()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -158,8 +160,8 @@ def main() -> int:
                           "/tmp/imu_pub.log"))
     if not args.no_remote:
         print("[session] starting stereo sender on %s" % SENDER_IP)
-        ssh('cd /dev/shm/ucsdk_run && (setsid nohup ./stereo_tcp_sender rect 192.168.123.101 9101 '
-            '> sender.log 2>&1 < /dev/null & echo $! > sender.pid); sleep 1; true')
+        ssh('cd /dev/shm/ucsdk_run && (setsid nohup ./stereo_tcp_sender %s 192.168.123.101 9101 '
+            '> sender.log 2>&1 < /dev/null & echo $! > sender.pid); sleep 1; true' % args.sender_mode)
 
     rospy.init_node("go1_remote_record", anonymous=False)
     print("[session] waiting for /go1/remote ...")

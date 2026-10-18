@@ -185,6 +185,22 @@ rosnode list; rostopic list
   轨迹 3.5 m（效果图 `cam_evidence/slam_rec_map.png`）。
 - **注意**：8007 帧长实测有 **820 / 870** 两种（重启后出现 870；前 820B 布局相同，
   尾部多 50B），解析器已兼容。
+- **双目标定（工具已就绪；2026-10-18 合成数据自测 PASS）**：
+  1. 打印 `targets/checkerboard_9x6_20mm_A4.pdf`（A4、**实际大小/100%**；方格 20 mm，
+     内角点 9×6；打印后量一下实际方格尺寸，贴在硬板上保持平整）。
+  2. 狗上电、相机空闲后，用**原始鱼眼**模式录制：
+     `python3 go1_remote_record.py --sender-mode raw`
+     按 R1+A 开始 → 把棋盘格在 face 相机前**缓慢**移动（覆盖中心/四角/边缘、
+     0.3–1.5 m、各角度倾斜，保持整板同时出现在左右目中）60–90 s → R1+A 结束。
+  3. 标定：
+     ```bash
+     python3 go1_stereo_calibrate.py --bag <bag> --model fisheye \
+       --cols 9 --rows 6 --square 0.020 --out ~/go1_recordings/calib_fisheye
+     ```
+     输出：`stereo_calib.yaml`（K/D/R/T/基线/RMS）、`rectified_camera_info.yaml`
+     （校正后 pinhole 参数，可替换接收端估计值）、`openvins_imucam_chain.yaml`
+     （草稿；`T_imu_cam` 待标定）、`rectified_check.png`（校正效果自查）、`report.txt`。
+  自测基准：fx 误差 0.02%、基线误差 0.23%、相对旋转 0.6°、RMS 0.23 px。
 - **标定**：暂用估计内参（hFov≈90° ⇒ fx=width/2，基线≈25.09 mm）；
   `stereo_depth_demo.py` 可出视差/深度图与距离估计。后续用 OpenCV fisheye
   棋盘格（或 Kalibr）实测替换，见 `TASKS.md`。
