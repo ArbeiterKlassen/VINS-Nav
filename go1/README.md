@@ -1,214 +1,140 @@
-# Go1 bring-up
+# Go1 bring-up — 实机验证版操作说明
 
-Working notes for connecting the Unitree Go1 to the VINS-Nav stack. Hardware
-background is in [`../docs/unitree_go1.md`](../docs/unitree_go1.md); this file is
-the operational side.
+**状态（2026-10-17）**：相机 H.264 端到端已验证；低层 500Hz 状态解码已验证；
+`.161:8082` 高层服务的判读已纠正。证据、事件时间线与全部纠错见
+[`FINDINGS-2026-10-11.md`](FINDINGS-2026-10-11.md)；机器人自带 ROS 图的只读流程见
+[`ROS_BRINGUP.md`](ROS_BRINGUP.md)；时间同步见 [`TIMESYNC.md`](TIMESYNC.md)。
 
-**Status 2026-10-11:** network configured, camera SDK builds and runs, end-to-end
-unverified — the robot's battery is flat and it is powered off. Everything below
-marked *verified* was checked without the robot; everything marked *to confirm*
-needs it powered on.
-
----
-
-## 1. Network
-
-The VM reached `192.168.123.x` through the host's NAT even before any changes, but
-NAT only works for flows the VM *initiates*. The camera streams are **pushed by the
-Jetson to a fixed address**, so the VM needs a real address on that subnet.
-
-A second NIC was added for this:
-
-| Interface | Address | Role |
-|-----------|---------|------|
-| `ens33` | `192.168.38.134/24` | VMnet8 NAT — internet, unchanged |
-| `ens37` | **`192.168.123.101/24`** | bridged to the host's 2.5G port — robot subnet |
-
-*Verified:* `ens37` is up, carrier present, and the route is now direct rather than
-through the NAT gateway:
-
-```
-$ ip route get 192.168.123.10
-192.168.123.10 dev ens37 src 192.168.123.101
-```
-
-**`IpLastSegment` must be set to 101** in the sender's config before any streaming
-(see §3). The receiver's address is `192.168.123.<IpLastSegment>`.
+> 旧版本文档中 **"推流端口 9201–9205"** 与 **"8082 服务没跑"** 两处结论已被实机
+> 证伪，以本文件与 FINDINGS 为准。
 
 ---
 
-## 2. Two different streaming mechanisms — do not mix them up
+## 0. 安全 SOP（每次动手前先读）
 
-There are **two unrelated** UDP schemes in the camera SDK, and the port numbers
-differ. Reading only one source gives the wrong answer, which happened during the
-first pass of this research.
+1. **默认不带任何客户端运行**；SDK/控制类客户端**用完即断**（不要留后台 500Hz 流）。
+2. 启动任何**向运动系统发包**的客户端（ros_udp、8007 轮询、控制测试）前**先打招呼**；
+   狗在地面、有人看护、有人手放电源开关。
+3. 单客户端：`.161:8082` 同一时刻只服务一个客户端（connect() 语义）。其他源端口
+   探测会收到 **ICMP port-unreachable —— 不代表服务没跑**。
+4. `.13` 磁盘 81%：一切产物放 `/dev/shm`（RAM），不落盘。
+5. 相机自启节点只 **kill 不删**；恢复脚本随时可用（`camera_nodes.sh`）。
 
-| | `StereoCameraCommon::startCapture(udpFlag, …)` | `example_putImagetrans` / `example_getimagetrans` |
+## 1. 网络（已验证）
+
+| 接口 | 地址 | 用途 |
 |---|---|---|
-| Ports | `9000 + camera position number` | **`9201`–`9205`** |
-| Comment in source | `StereoCameraCommon.hpp:594` | `example_getimagetrans.cc` header |
-| Sender gstreamer | `… ! rtph264pay ! udpsink host=192.168.123.SEG port=hostPort` | internal, not shown |
-| Receiver pipeline | — | `udpsrc … ! rtph264depay ! h264parse ! omxh264dec ! videoconvert ! appsink` |
+| `ens33` | 192.168.38.134/24 | VMnet NAT — 外网 |
+| `ens37` | **192.168.123.101/24** | 机器人网段直连（相机接收地址） |
 
-The image-transmission path is the documented, example-backed workflow, so **use
-9201–9205**:
+| 端点 | 地址 | 说明 |
+|---|---|---|
+| 运动控制板 | `192.168.123.10` | UDP **8007** 低层状态/控制 |
+| sport 高层服务 | `192.168.123.161` | UDP **8082**（单客户端）；ROS master **11311** |
+| Jetson | `.13 / .14 / .15` | `ssh unitree@<ip>` 免密；相机分配见 §2 |
 
-| Port | Camera |
-|------|--------|
-| 9201 | front |
-| 9202 | chin |
-| 9203 | left |
-| 9204 | right |
-| 9205 | abdomen |
+## 2. 相机 H.264 链路（已验证，端口 = 9000 + 位置号）
 
----
+| 板 | 相机 | 设备节点 | 备注 |
+|---|---|---|---|
+| `.13` (unitree-desktop) | **camera1 = face（前视）** | `/dev/video1` | 本次演示使用 |
+| `.13` | camera2 = chin（下巴） | `/dev/video0` | |
+| `.14` (unitree-desktop) | camera3 = left / camera4 = right | video1 / video0 | 侧向双目对 |
+| `.15` (nx) | camera5 = belly（腹部） | `/dev/video0` | |
 
-## 3. Who runs what
+- **端口纠正（实测）**：本世代板载 SDK 的 `startCapture(true,false)` 推流到
+  **9000 + 相机位置号**（依据 `StereoCameraCommon.hpp:567` 文档）。face → **9001**。
+  示例注释里的 9201–9205 属另一套机制，实测**无包**，不要混用。
+- 推流原理：Jetson 本机 V4L2 采集 → `omxh264enc` 硬编码 → RTP/UDP 推给接收端。
+  构建/运行配方见 [`stage/README.md`](stage/README.md)（在 `.13` 上全 `/dev/shm`，
+  零磁盘写入；需两处适配：3 参 `getRectStereoFrame(l,r,feim)`、`waitKey→usleep`）。
+- 发送端配置 `IpLastSegment: 101` → 推给 VM `192.168.123.101`。
+- **流程**：
+  ```bash
+  # 1) 释放相机（只 kill 不删；record 输出到 stdout，板子不落盘）
+  ssh unitree@192.168.123.13 'bash -s record -' < camera_nodes.sh > cam_13.json
+  scp cam_13.json unitree@192.168.123.13:/dev/shm/cam_nodes_record.json
+  ssh unitree@192.168.123.13 'bash -s kill /dev/shm/cam_nodes_record.json' < camera_nodes.sh
+  # 2) 标定读取（板载二进制，cwd 中含 stereo_camera_config.yaml）
+  ssh unitree@192.168.123.13 \
+    'cd /dev/shm/ucsdk_run && /home/unitree/Unitree/sdk/UnitreeCameraSdk/bins/example_getCalibParamsFile'
+  # 3) 编译并运行推流器（见 stage/README.md）
+  # 4) VM 端验包 + 解码
+  python3 udp_probe.py --ports 9001 --seconds 10
+  gst-launch-1.0 -e udpsrc address=192.168.123.101 port=9001 \
+    caps="application/x-rtp,media=video,encoding-name=H264" \
+    ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert \
+    ! videorate ! video/x-raw,framerate=2/1 ! pngenc \
+    ! multifilesink location=front_%05d.png
+  ```
+- **停止推流（SOP：用完必停）**：`kill $(cat /dev/shm/ucsdk_run/put.pid)`；
+  核实进程用 `ps -eo pid,args | grep -F ./example_putImagetrans`
+  （**`pgrep` 因 comm 15 字符截断会误报"进程不存在"**）。
+- **恢复相机节点**：`camera_nodes.sh restore`（autostart 入口只含 camerarosnode，
+  **不含 imageai**）；全量恢复用 record 回放（`GO1_CAM_ENTRY=/nonexistent`）或重启板子。
+  断电重启会自动复原自启节点。
+- 证据帧：`cam_evidence/front_*.png`（44 帧 928×800，**不入库**；主机侧亦已取回副本）。
 
-`UnitreeCamera cam("…yaml")` opens a **local V4L2 device**. It therefore only works
-on the machine physically attached to that camera — one of the three Jetsons, not
-the VM. The split is:
+## 3. 低层状态（`.10:8007`，500Hz，已验证）
 
-```
-Jetson (.13 / .14 / .15)                    VM (192.168.123.101)
-  example_putImagetrans                       udp_probe.py  (connectivity)
-    opens /dev/video*, H.264 encodes            or gst-launch (decode)
-    pushes RTP/UDP to 192.168.123.101   ───►
-    ports 9201–9205
-```
+- 请求-应答：发 64B `'x'` 填充包 → 回 820B 压缩 LowState（帧头 `FE EF FF`）。
+- 用法（**SOP：属发包，用前打招呼**）：
+  ```bash
+  python3 lowstate_rx.py --seconds 4 --hz 500 --csv /tmp/imu.csv
+  ```
+  实测 PASS：500.6 帧/s、820B 恒定、tick 1002 ms/s、四元数范数 1.000000。
+- 关键偏移：IMU @22（quat/gyro/accel/rpy，f32；temp@74）；12 电机槽 @75+32k
+  （mode@+0、q f32@+1、dq f32@+5、temp@+23）；**tick u32 @755（单位 ms）**。
+  ddq/tauEst 为量化字段（整数 / k·2⁻⁸），工具暂按原始字节读取。
+- 用途：给 VIO 的 500Hz IMU（`--csv` 直接落表）。
 
-### Config files (in the SDK root)
+## 4. 高层状态（`.161:8082`，单客户端）
 
-| File | `Transmode` | `FrameSize` | Use |
-|------|-------------|-------------|-----|
-| `stereo_camera_config.yaml` | `-1` (no streaming) | 928×400 | calibration readout only |
-| `trans_rect_config.yaml` | `0` (right, raw) | 1856×800 | full stereo transmission |
+- `/high_state` 平时无数据的原因：`ros_udp` 只在 `/high_cmd` 回调里发布状态。
+- 采样（**属发包，用前打招呼**）：
+  ```bash
+  rostopic echo -n1 /high_state        # 终端1（先订阅）
+  python3 pub_high_cmd_mirror_once.py  # 终端2（逐位镜像当前流，无行为变化）
+  ```
+- 2026-10-11 实测：机器人 mode=7（damping）、bodyHeight≈0.007 m、平躺；IMU 水平。
+  **"站起来"未达成**——mode 0 对 damping 无效；下一步候选 mode 6/8（需打招呼+看护）。
+  另注意遥控器锁定态（L2+R2）。
+- 服务端自清：客户端断开后新探测立即回 **1087B**（= sizeof(HighState)，**未压缩**）。
 
-Both currently have `IpLastSegment: 15`. **Change it to `101`** for the VM.
-
-`Transmode` values: `0` right raw, `1` stereo raw, `2` right rectified (FOV
-adjustable 60–140°), `3` stereo rectified, `-1` do not transmit.
-
-> **Gotcha from the source:** for stereo modes, *the left and right outputs are
-> swapped* — left lands in the right image and vice versa (`example_putImagetrans.cc`).
-> Worth re-checking empirically before trusting either channel.
-
-### Freeing the camera first
-
-The Jetsons autostart camera nodes that hold `/dev/video*`, so the SDK cannot open
-the device until they are stopped. The source gives the commands:
-
-```bash
-ps -A | grep point | awk '{print $1}' | xargs kill -9
-ps -aux | grep mqttControlNode  | grep -v grep | head -n 1 | awk '{print $2}' | xargs kill -9
-ps -aux | grep live_human_pose  | grep -v grep | head -n 1 | awk '{print $2}' | xargs kill -9
-```
-
-or stop `~/Unitree/autostart/02camerarosnode` (frees the camera) and
-`~/Unitree/autostart/04imageai` (frees compute) properly.
-
-**This disables the robot's own person-tracking / image AI.** That is a real
-functional loss and should be agreed before doing it, not discovered afterwards.
-
----
-
-## 4. Building the SDK on this VM — resolved
-
-The SDK ships **prebuilt static libraries** for `arm64` and `amd64`, so only the
-examples need building. The reported trap is that it is pinned to OpenCV 4.1.1 and
-segfaults with newer versions; this VM has **4.2.0**.
-
-*Verified:* it builds and runs.
-
-```
-examples built:  example_getCalibParamsFile   example_getRawFrame
-                 example_getDepthFrame        example_getRectFrame
-                 example_getPointCloud        example_putImagetrans
-                 example_getimagetrans
-```
-
-The lib's undefined symbols are ordinary core/imgproc/calib3d calls (`cv::Mat`,
-`cv::cvtColor`, `cv::remap`, `cv::StereoBM`, …), all present in 4.2. Running
-`example_getCalibParamsFile` with no camera attached exits **0** with a clean
-"No camera" message — no segfault.
-
-One real build blocker, unrelated to OpenCV: **`libudev-dev` is missing** (the
-runtime `libudev1` is present, but not the `.so` symlink). Worked around without
-touching the system by pointing the linker at a stub directory:
+## 5. 机器人自带 ROS 图（只读）
 
 ```bash
-mkdir -p /tmp/ucsdk_build/stubs
-ln -sf /lib/x86_64-linux-gnu/libudev.so.1 /tmp/ucsdk_build/stubs/libudev.so
-cd /tmp/ucsdk_build
-cmake ~/go1_ws/src/UnitreecameraSDK -DCMAKE_EXE_LINKER_FLAGS="-L/tmp/ucsdk_build/stubs"
-make -j4
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://192.168.123.161:11311
+export ROS_IP=192.168.123.101
+rosnode list; rostopic list
 ```
+- 常驻节点：`/camera1` `/camera3` `/camera4` `/camera5` `/node_lcm`
+  `/node_obstacle_avoidance` `/node_obstacle_traverse` `/ros2udp_motion_mode_adv`
+  `/ukd_triple_2_goal` `/ukd_triple_udp_node` `/rosout`。
+- `/ros2udp/odom` ≈200 Hz（ukd 桥；空闲时全零）；`/joint_states`、`/lcm_node/*`
+  可能静默；`/ukd_triple/state` 为 `a2_msgs/UKDState`（本机未装，无法解码）。
 
-Binaries land in `~/go1_ws/src/UnitreecameraSDK/bins/`. For a permanent setup
-install `libudev-dev` properly instead.
-
-### Decoding on the VM
-
-The SDK's receive pipeline uses **`omxh264dec`** — the Jetson hardware decoder,
-which does not exist on x86. Software equivalents `h264parse` and `avdec_h264` are
-also missing here (they live in `gstreamer1.0-plugins-bad` and
-`gstreamer1.0-libav`). Present: `udpsrc`, `rtph264depay`, `videoconvert`,
-`appsink`, `autovideosink`.
-
-That does not block the first test — **proving the packets arrive needs no
-decoder**. Once the plugins are installed, the VM-side pipeline is the SDK's with
-one substitution:
+## 6. 相机节点管理（`camera_nodes.sh`）
 
 ```bash
-# Jetson / the SDK's own example
-gst-launch-1.0 udpsrc address=192.168.123.101 port=9201 \
-  ! application/x-rtp,media=video,encoding-name=H264 \
-  ! rtph264depay ! h264parse ! omxh264dec ! videoconvert ! autovideosink
-
-# x86 VM: swap the hardware decoder for the software one
-gst-launch-1.0 udpsrc address=192.168.123.101 port=9201 \
-  ! application/x-rtp,media=video,encoding-name=H264 \
-  ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink
+./camera_nodes.sh status
+./camera_nodes.sh record  ~/go1_cam_backup.json   # 或 record - 输出到 stdout（推荐，板子不落盘）
+./camera_nodes.sh kill    ~/go1_cam_backup.json   # 先校验 argv，再 SIGTERM→SIGKILL
+./camera_nodes.sh restore ~/go1_cam_backup.json   # 优先板载 autostart 入口
 ```
+- matcher：`point_cloud_node example_point live_human_pose mqttControlNode`。
+- 本仓库留有三台板的 record：`cam_13.json` / `cam_14.json` / `cam_15.json`。
 
----
+## 7. 文件索引
 
-## 5. Test procedure once the robot has power
-
-Ordered cheapest-first; each step is meaningful on its own.
-
-1. **Connectivity** — from the VM:
-   ```bash
-   ping -c3 192.168.123.10 192.168.123.13 192.168.123.161
-   ip route get 192.168.123.10        # expect dev ens37, not the NAT gateway
-   ```
-2. **Reverse direction** — from the robot side, ping `192.168.123.101`. The camera
-   path depends on the Jetson reaching the VM, which the NAT path never exercised.
-3. **Calibration readout** — SSH to the Jetson owning the camera of interest, stop
-   the autostart camera nodes, then run `bins/example_getCalibParamsFile`. Confirm
-   `output_camCalibParams.yaml` appears and holds a sane baseline. `Transmode: -1`
-   in `stereo_camera_config.yaml` means this does *not* stream, so it is safe.
-4. **Stream receives** — set `IpLastSegment: 101`, run `example_putImagetrans` on
-   the Jetson, and on the VM:
-   ```bash
-   python3 go1/udp_probe.py --ports 9201 9202 --seconds 30
-   ```
-   Success is packets arriving with an `RTP v2` header. Decoding is step 5's problem.
-5. **Decode** — install `gstreamer1.0-plugins-bad` and `gstreamer1.0-libav`, then
-   run the `avdec_h264` pipeline above and look at the picture.
-
-Nothing in this list sends a control packet. Control comes later, and separately:
-idle/stand first, robot on the ground, someone watching.
-
----
-
-## 6. Open questions
-
-- Which Jetson owns which camera, and whether the head pair is the best VIO choice
-  (widest baseline? best forward view?). The board/camera mapping in
-  `docs/unitree_go1.md` came from documentation, not from the unit.
-- Whether `h264parse`/`avdec_h264` decode at 30 fps 1856×800 on this VM, or whether
-  the stream has to be reduced via `FrameSize` / `Transrate` on the sender.
-- End-to-end latency and whether the RTP stream carries usable timestamps for VIO —
-  the stream is H.264 over RTP with no obvious time base, and the Jetsons have no
-  RTC, so timestamping needs thought before this can feed an estimator.
+| 文件 | 说明 |
+|---|---|
+| `FINDINGS-2026-10-11.md` | 现场发现 / 纠错 / 事件闭环 / SOP（**先读**） |
+| `stage/` | 推流配置 + 复制即用的构建说明（第三方示例源码不入库） |
+| `lowstate_rx.py` | 8007 低层状态解码器（IMU CSV） |
+| `pub_high_cmd_mirror_once.py` | 触发 `/high_state` 采样 |
+| `camera_nodes.sh` | 相机节点 kill / restore 框架 |
+| `udp_probe.py` | 相机流验包探针 |
+| `setup_go1_env.sh` | 本 VM 的 ROS / catkin 环境 |
+| `cam1_face_calib_2026-10-11.yaml` | face 相机出厂标定（PosNumber=1，基线≈25.09 mm） |
