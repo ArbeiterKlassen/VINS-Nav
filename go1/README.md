@@ -142,7 +142,9 @@ rosnode list; rostopic list
 | `stage/stereo_tcp_sender.cc` | 双目 TCP+JPEG 发送端（`.13` 编译） |
 | `go1_stereo_receiver.py` | 双目接收端（ROS 图像 + camera_info / 存 PNG） |
 | `go1_imu_publisher.py` | 8007 IMU → `/go1/imu`（500 Hz，已获准启用） |
-| `record_stereo_imu.sh` | 一键录制「双目 + IMU」rosbag（手柄操控时使用） |
+| `record_stereo_imu.sh` | 一键录制「双目 + IMU」rosbag（定时；手柄操控时使用） |
+| `go1_remote_record.py` | **R1+A 遥控触发录制**会话管理器（按一次开始 / 再按结束，可多段） |
+| `go1_remote_monitor.py` | 手柄监听/定位工具（验证按键位与偏移） |
 | `make_stereo_bag.py` | PNG 对 [+IMU CSV] → rosbag（离线 SLAM 输入） |
 | `run_slam_offline.sh` | 离线 SLAM（RTAB-Map stereo / `--ov-config` OpenVINS） |
 | `stereo_depth_demo.py` | 双目测距演示（SGBM 视差 → 深度图） |
@@ -175,6 +177,14 @@ rosnode list; rostopic list
 - **实机链路状态（2026-10-18）**：双目实时 928×800 @ ~7 fps（JPEG ~92 KB/眼），
   IMU 500 Hz（按 tick 去重）；15 s 实机录制 = 双目各 97 帧 + IMU 7014 条；
   离线 RTAB-Map 在该真实数据上建图节点 14 个（静止站立、无闭环链接属正常）。
+- **R1+A 遥控触发录制（2026-10-18 实机验证）**：`go1_remote_record.py` 一键启动
+  双目+IMU 管线，按遥控 **R1+A 开始录制**、再按一次结束（可多段）。手柄数据取自
+  8007 LowState 的 `wirelessRemote`（块偏移 759，btn@761，**R1+A = 0x0101**），
+  **不占用 8082 客户端**。实机验证：45.2 s / 1.37 GB / 双目各 306 帧 /
+  IMU 20454 条；离线 RTAB-Map 建图 **Node=41 / Link=13**，点云 11.3 万点、
+  轨迹 3.5 m（效果图 `cam_evidence/slam_rec_map.png`）。
+- **注意**：8007 帧长实测有 **820 / 870** 两种（重启后出现 870；前 820B 布局相同，
+  尾部多 50B），解析器已兼容。
 - **标定**：暂用估计内参（hFov≈90° ⇒ fx=width/2，基线≈25.09 mm）；
   `stereo_depth_demo.py` 可出视差/深度图与距离估计。后续用 OpenCV fisheye
   棋盘格（或 Kalibr）实测替换，见 `TASKS.md`。

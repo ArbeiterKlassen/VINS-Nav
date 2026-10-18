@@ -15,7 +15,8 @@
 * 实测：服务对触发包 1:1 回包（发送率≈回包率）；不发则不收，纯被动不可行
   （--passive 仅用于复现该结论）。
 
-帧格式（820 B，小端；偏移为实测值）
+帧格式（820 B；2026-10-18 起实测也有 870 B 变体——前 820B 布局相同，尾部多 50B，
+本工具兼容两种帧长；偏移为实测值，小端）
 -----------------------------------
   0..1    head = FE EF
   2       levelFlag = FF (LOWLEVEL)
@@ -35,8 +36,12 @@
       +23    temperature i8
       （+9..+22、+24..+31 实测恒 0，未定点标）
   755..758 tick u32 ms（实测逐毫秒 +1；单位与结构体注释一致）
-  803..806 疑似 CRC（每帧变化）
-  807..819 未解释尾部（内含 FE EF 字样，勿依赖）
+  759..798 wirelessRemote 40B（手柄数据；2026-10-18 实测定位：
+            head@759 = 55 51；btn u16LE@761（bit0=R1, bit8=A → R1+A=0x0101）；
+            lx/rx/ry/L2/ly f32 @763/767/771/775/779；idle 16B @783..798）
+  799..802 reserve
+  803..806 CRC（每帧变化）
+  807..819 未解释尾部（勿依赖）
 
 用法
 ----
@@ -58,10 +63,16 @@ import time
 DST = ("192.168.123.10", 8007)
 POLL = b"x" * 64
 FRAME_LEN = 820
+FRAME_LENS = (820, 870)  # 实测两种帧长（重启后出现 870）：前 820B 布局相同，尾部多 50B
 
 MOTOR0 = 75
 MOTOR_STRIDE = 32
 TICK_OFF = 755
+REMOTE_OFF = 759      # wirelessRemote 40B 块的起始偏移（实测）
+BTN_OFF = REMOTE_OFF + 2
+AXES_OFF = REMOTE_OFF + 4
+BUTTON_NAMES = ["R1", "L1", "start", "select", "R2", "L2", "F1", "F2",
+                "A", "B", "X", "Y", "up", "right", "down", "left"]
 
 
 def _f32(d: bytes, off: int) -> float:
@@ -70,8 +81,8 @@ def _f32(d: bytes, off: int) -> float:
 
 def parse_lowstate(d: bytes) -> dict:
     """解析 820B 低层帧；返回 dict。未知/可疑字段按偏移直接给出，不做臆测。"""
-    if len(d) != FRAME_LEN:
-        raise ValueError(f"unexpected frame length {len(d)} (want {FRAME_LEN})")
+    if len(d) not in FRAME_LENS:
+        raise ValueError(f"unexpected frame length {len(d)} (want one of {FRAME_LENS})")
     if d[0] != 0xFE or d[1] != 0xEF or d[2] != 0xFF:
         raise ValueError(f"not a LOWLEVEL frame: head={d[0]:02x}{d[1]:02x} lvl={d[2]:02x}")
 
@@ -103,6 +114,23 @@ def parse_lowstate(d: bytes) -> dict:
             }
         )
     return frame
+
+
+def parse_remote(d: bytes) -> dict:
+    """解析 820B 帧中的手柄数据（unitree_legged_sdk/joystick.h 布局）。
+
+    返回 {btn: u16, buttons: {name: bool}, axes: {lx,rx,ry,L2,ly}}。
+    R1+A 的组合值为 0x0101（btn bit0 | bit8）。
+    """
+    if len(d) not in FRAME_LENS:
+        raise ValueError(f"unexpected frame length {len(d)}")
+    btn = struct.unpack_from("<H", d, BTN_OFF)[0]
+    lx, rx, ry, l2, ly = struct.unpack_from("<5f", d, AXES_OFF)
+    return {
+        "btn": btn,
+        "buttons": {name: bool(btn & (1 << i)) for i, name in enumerate(BUTTON_NAMES)},
+        "axes": {"lx": lx, "rx": rx, "ry": ry, "L2": l2, "ly": ly},
+    }
 
 
 def main() -> int:
@@ -219,7 +247,7 @@ def main() -> int:
     imu = last["imu"]
     qn = math.sqrt(sum(x * x for x in imu["quaternion"]))
     an = math.sqrt(sum(x * x for x in imu["accelerometer"]))
-    checks.append(("frame size 820B only", sizes == {FRAME_LEN}))
+    checks.append(("frame size in {820,870}", set(sizes) <= set(FRAME_LENS)))
     checks.append(("quaternion norm ~1", abs(qn - 1.0) < 1e-3))
     checks.append(("|accel| in 8..12 m/s^2", 8.0 < an < 12.0))
     tick_rate = None

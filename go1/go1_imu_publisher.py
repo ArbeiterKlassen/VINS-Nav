@@ -27,9 +27,9 @@ import sys
 import time
 
 import rospy
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, Joy
 
-from lowstate_rx import POLL, parse_lowstate
+from lowstate_rx import POLL, parse_lowstate, parse_remote
 
 
 def main() -> int:
@@ -45,6 +45,7 @@ def main() -> int:
 
     rospy.init_node("go1_imu_publisher", anonymous=False)
     pub = rospy.Publisher(args.topic, Imu, queue_size=200)
+    joy_pub = rospy.Publisher("/go1/remote", Joy, queue_size=10)
 
     csvf = writer = None
     if args.csv:
@@ -65,6 +66,8 @@ def main() -> int:
     sent = recv = 0
     last_acc = (0.0, 0.0, 0.0)
     last_tick = None   # 按 tick 去重（实测 .10 会对同一请求回两个包）
+    last_btn = None
+    last_joy_t = 0.0
 
     print(f"[imu] polling {dst[0]}:{dst[1]} at {args.hz:g} Hz -> {args.topic}")
     sys.stdout.flush()
@@ -116,6 +119,22 @@ def main() -> int:
                 msg.linear_acceleration_covariance[0] = msg.linear_acceleration_covariance[4] = msg.linear_acceleration_covariance[8] = 1e-2
                 pub.publish(msg)
                 last_acc = a
+                # 手柄状态：/go1/remote（变化时立即发 + 10Hz 心跳）
+                try:
+                    rm = parse_remote(d)
+                    btn = rm["btn"]
+                    if btn != last_btn or (stamp.to_sec() - last_joy_t) >= 0.1:
+                        joy = Joy()
+                        joy.header.stamp = stamp
+                        joy.header.frame_id = "remote"
+                        ax = rm["axes"]
+                        joy.axes = [ax["lx"], ax["rx"], ax["ry"], ax["L2"], ax["ly"]]
+                        joy.buttons = [1 if (btn >> i) & 1 else 0 for i in range(16)]
+                        joy_pub.publish(joy)
+                        last_btn = btn
+                        last_joy_t = stamp.to_sec()
+                except ValueError:
+                    pass
                 if writer:
                     writer.writerow([f"{now:.6f}", fr["tick"], q[0], q[1], q[2], q[3],
                                      g[0], g[1], g[2], a[0], a[1], a[2],
