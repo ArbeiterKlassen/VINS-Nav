@@ -1,0 +1,81 @@
+%YAML:1.0
+---
+SerialNumber: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 0. ]
+PositonNumber: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 1. ]
+RectifyFrameSize: !!opencv-matrix
+   rows: 1
+   cols: 2
+   dt: d
+   data: [ 464., 400. ]
+LeftXi: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 1.5030546948307857e+00 ]
+LeftIntrinsicMatrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 2.9449440488760928e+02, -2.0367375808871907e-02,
+       2.2656169002072320e+02, 0., 3.0367279153895294e+02,
+       2.0842449376985397e+02, 0., 0., 1. ]
+LeftDistortionCoefficients: !!opencv-matrix
+   rows: 1
+   cols: 4
+   dt: d
+   data: [ 3.2934132131713140e-01, -7.4804966426197161e-01,
+       6.1537539733076477e-03, 2.7824486948638890e-03 ]
+LeftRotation: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ -9.9983867814077720e-01, 6.1138059924841642e-03,
+       1.6889022173871462e-02, -6.1146781272314746e-03,
+       -9.9998130518095196e-01, 0., 1.6888706436658026e-02,
+       -1.0327093447689923e-04, 9.9985737029338873e-01 ]
+RightXi: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 5.5590186626061799e-01 ]
+RightIntrinsicMatrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1.8404114837876728e+02, 3.4907917795579785e-01,
+       2.1820960500916678e+02, 0., 1.8999856090724791e+02,
+       1.8933146059249299e+02, 0., 0., 1. ]
+RightDistortionCoefficients: !!opencv-matrix
+   rows: 1
+   cols: 4
+   dt: d
+   data: [ -2.0073034489831121e-01, 2.4828395697814139e-02,
+       3.7807824627892014e-03, -1.0932023434075048e-04 ]
+RightRotation: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ -9.9957557709470046e-01, 6.3540187243437745e-03,
+       2.8430478748106308e-02, -6.3278992529506375e-03,
+       -9.9997947000674314e-01, 1.0085911345711421e-03,
+       2.8436303677523603e-02, 8.2825786016037738e-04,
+       9.9959526340518268e-01 ]
+Translation: !!opencv-matrix
+   rows: 3
+   cols: 1
+   dt: d
+   data: [ 2.5088402468075287e+01, -1.5903222276245740e-01,
+       -1.3426934402999255e-01 ]
+Reserved: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1., 0., 0., 0., 1., 0., 0., 0., 1. ]

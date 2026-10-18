@@ -1,0 +1,68 @@
+%YAML:1.0
+---
+# staged for .13 H.264 streaming; DeviceNode 1 = /dev/video1 = camera1 (face)
+# IpLastSegment 101 = receiver 192.168.123.101 (the VM)
+LogLevel: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 1. ]
+Threshold: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 190. ]
+Algorithm: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [1. ]
+IpLastSegment: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 101. ]
+DeviceNode: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 1. ]
+hFov: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 90. ]
+FrameSize: !!opencv-matrix
+   rows: 1
+   cols: 2
+   dt: d
+   data: [ 1856., 800. ]
+RectifyFrameSize: !!opencv-matrix
+   rows: 1
+   cols: 2
+   dt: d
+   data: [ 928., 800. ]
+FrameRate: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 3e+01 ]
+Transmode: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 0. ]
+Transrate: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 3e+01 ]
+Depthmode: !!opencv-matrix
+   rows: 1
+   cols: 1
+   dt: d
+   data: [ 1. ]
+Reserved: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d

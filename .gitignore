@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+*.bak-*
+go1/cam_evidence/
+go1/cam_*.err
+go1/stage/example_putImagetrans*.cc

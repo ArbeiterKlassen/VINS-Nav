@@ -1,0 +1,49 @@
+{
+  "recorded_at": "2021-12-15T17:06:05+08:00",
+  "hostname": "unitree-desktop",
+  "matchers": "point_cloud_node example_point live_human_pose mqttControlNode",
+  "processes": [
+    {
+      "pid": 7469,
+      "ppid": 5920,
+      "exe": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node",
+      "cwd": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode",
+      "argv": ["/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node", "_run_config_file:=./src/unitree_camera/config/stereo_camera_config.yaml", "camera4", "15214180"]
+    },
+    {
+      "pid": 7627,
+      "ppid": 5920,
+      "exe": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node",
+      "cwd": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode",
+      "argv": ["/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node", "_run_config_file:=./src/unitree_camera/config/stereo_camera_config1.yaml", "camera3", "15214180"]
+    },
+    {
+      "pid": 7732,
+      "ppid": 7717,
+      "exe": "/bin/bash",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin",
+      "argv": ["bash", "-c", "export GST_PLUGIN_PATH=/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/ThirdParty/webSinkPipe/build; cd /home/unitree/Unitree/autostart/imageai//mLComSystemFrame/bin; ./mqttControlNode ../config/mqSNNLConfig.yaml; exec bash"]
+    },
+    {
+      "pid": 7733,
+      "ppid": 7732,
+      "exe": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin/mqttControlNode",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin",
+      "argv": ["./mqttControlNode", "../config/mqSNNLConfig.yaml"]
+    },
+    {
+      "pid": 7763,
+      "ppid": 7717,
+      "exe": "/bin/bash",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin",
+      "argv": ["bash", "-c", "export GST_PLUGIN_PATH=/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/ThirdParty/webSinkPipe/build; cd /home/unitree/Unitree/autostart/imageai//mLComSystemFrame/bin; ./mqttControlNode ../config/mqSNNLConfig.yaml 1; exec bash"]
+    },
+    {
+      "pid": 7764,
+      "ppid": 7763,
+      "exe": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin/mqttControlNode",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin",
+      "argv": ["./mqttControlNode", "../config/mqSNNLConfig.yaml", "1"]
+    }
+  ]
+}

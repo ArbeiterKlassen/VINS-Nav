@@ -1,0 +1,49 @@
+{
+  "recorded_at": "2021-12-20T13:13:41+08:00",
+  "hostname": "nx",
+  "matchers": "point_cloud_node example_point live_human_pose mqttControlNode",
+  "processes": [
+    {
+      "pid": 8656,
+      "ppid": 7056,
+      "exe": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node",
+      "cwd": "/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode",
+      "argv": ["/home/unitree/Unitree/autostart/camerarosnode/cameraRosNode/devel/lib/unitree_camera/point_cloud_node", "_run_config_file:=./src/unitree_camera/config/stereo_camera_config.yaml", "camera5", "15172374"]
+    },
+    {
+      "pid": 8790,
+      "ppid": 8778,
+      "exe": "/bin/bash",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin",
+      "argv": ["bash", "-c", "export GST_PLUGIN_PATH=/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/ThirdParty/webSinkPipe/build; cd /home/unitree/Unitree/autostart/imageai//mLComSystemFrame/bin; ./mqttControlNode ../config/mqMNConfig.yaml; exec bash"]
+    },
+    {
+      "pid": 8791,
+      "ppid": 8790,
+      "exe": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin/mqttControlNode",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/bin",
+      "argv": ["./mqttControlNode", "../config/mqMNConfig.yaml"]
+    },
+    {
+      "pid": 8808,
+      "ppid": 8778,
+      "exe": "/bin/bash",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/pyScripts",
+      "argv": ["bash", "-c", "export GST_PLUGIN_PATH=/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/ThirdParty/webSinkPipe/build; cd /home/unitree/Unitree/autostart/imageai//mLComSystemFrame/pyScripts; python3 live_human_pose.py; exec bash"]
+    },
+    {
+      "pid": 8809,
+      "ppid": 8808,
+      "exe": "/usr/bin/python3.6",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/pyScripts",
+      "argv": ["python3", "live_human_pose.py"]
+    },
+    {
+      "pid": 8905,
+      "ppid": 8809,
+      "exe": "/usr/bin/python3.6",
+      "cwd": "/home/unitree/Unitree/autostart/imageai/mLComSystemFrame/pyScripts",
+      "argv": ["python3", "live_human_pose.py"]
+    }
+  ]
+}
